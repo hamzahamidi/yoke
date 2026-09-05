@@ -73,7 +73,10 @@ el('label-form').addEventListener('submit', (event) => {
   const input = el('label') as HTMLInputElement;
   const button = el('save') as HTMLButtonElement;
   button.disabled = true;
+  // Its own element, because writing the outcome into the paragraph that
+  // holds the id would delete the id, and the next refresh would then fail.
   const note = el('label-note');
+  note.hidden = false;
   void ask({ kind: 'setLabel', label: input.value })
     .then((reply) => {
       if (reply?.kind === 'labelled') {
