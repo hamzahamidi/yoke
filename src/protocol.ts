@@ -31,6 +31,21 @@ export interface Operations {
    * debugger on, so a forgotten attachment can be seen rather than guessed at.
    */
   ping: { args: Record<string, never>; result: { extension: string; attached: number[] } };
+
+  /**
+   * Which Chrome profile this is.
+   *
+   * Chrome starts one host per profile but tells it nothing about which, so the
+   * extension mints a random id the first time it runs in a profile and keeps it
+   * in its own storage. The label is whatever the person typed in the popup, and
+   * empty until they do. The host names its endpoint after the id, which is what
+   * lets two profiles be connected at once instead of fighting over one path.
+   */
+  identify: {
+    args: Record<string, never>;
+    result: { id: string; label: string; windows: number; tabs: number };
+  };
+
   listTabs: { args: Record<string, never>; result: { tabs: TabInfo[] } };
   listGroups: { args: Record<string, never>; result: { groups: GroupInfo[] } };
 

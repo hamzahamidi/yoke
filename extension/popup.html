@@ -51,6 +51,18 @@
   button:hover:not(:disabled) { border-color: var(--cyan); color: var(--cyan); }
   button:disabled { opacity: .55; cursor: default; }
   a { color: var(--cyan); }
+  .field { display: flex; align-items: center; gap: 8px; }
+  .field span { font-weight: 600; flex: none; }
+  .field input {
+    flex: 1; min-width: 0; padding: 5px 8px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit;
+  }
+  .field input:focus { outline: none; border-color: var(--cyan); }
+  .field button { margin-top: 0; width: auto; padding: 5px 10px; }
+  code.inline {
+    display: inline; padding: 0 4px; margin: 0; border: 0; background: var(--panel);
+    font: 12px ui-monospace, Menlo, monospace;
+  }
 </style>
 
 <header>
@@ -72,6 +84,19 @@
   <code>npm install -g yoke-mcp
 yoke install</code>
   <p><a href="https://github.com/hamzahamidi/yoke#readme" target="_blank">Setup guide and troubleshooting</a></p>
+</section>
+
+<section>
+  <form id="label-form">
+    <label class="field">
+      <span>This profile</span>
+      <input id="label" type="text" maxlength="40" placeholder="Name this profile (optional)" autocomplete="off">
+      <button id="save" type="submit">Save</button>
+    </label>
+    <p>Optional. Tools show this name beside the profile's id, <code class="inline" id="profile-id"></code>, which works on its own.</p>
+    <p id="label-note" hidden></p>
+  </form>
+  <p id="stale" class="warn" hidden>This popup is newer than the extension's running code, so it cannot save a name yet. Reload Yoke at chrome://extensions and open this again.</p>
 </section>
 
 <section>

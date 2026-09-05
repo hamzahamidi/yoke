@@ -16,8 +16,10 @@ import { chmodSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
 import { connect, createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 
-import { PROTOCOL, isResponse, type Request, type SocketReply, type SocketRequest } from './protocol.js';
-import { endpointPath } from './socket-path.js';
+import {
+  PROTOCOL, isResponse, type ArgsOf, type OperationName, type Request, type SocketReply, type SocketRequest,
+} from './protocol.js';
+import { LEGACY_ID, endpointPathFor, isEndpointId } from './socket-path.js';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -57,17 +59,26 @@ function readFromChrome(onMessage: (message: unknown) => void): void {
 }
 
 export async function main(): Promise<void> {
-  const socketPath = endpointPath();
   const waiting = new Map<number, (reply: SocketReply) => void>();
   let nextId = 1;
   let server: Server | undefined;
+  let socketPath: string | undefined;
 
   const cleanup = (): void => {
     try { server?.close(); } catch { /* never listened */ }
-    if (process.platform !== 'win32') {
+    if (process.platform !== 'win32' && socketPath !== undefined) {
       try { unlinkSync(socketPath); } catch { /* already gone */ }
     }
   };
+
+  /** One question to the extension, answered with undefined when it stays silent. */
+  const askExtension = <K extends OperationName>(op: K, args: ArgsOf<K>, timeoutMs: number): Promise<SocketReply | undefined> =>
+    new Promise((resolve) => {
+      const id = nextId++;
+      const timer = setTimeout(() => { waiting.delete(id); resolve(undefined); }, timeoutMs);
+      waiting.set(id, (reply) => { clearTimeout(timer); resolve(reply); });
+      writeToChrome({ id, op, args });
+    });
 
   readFromChrome((message) => {
     if (!isResponse(message)) { return; }
@@ -122,6 +133,20 @@ export async function main(): Promise<void> {
     connection.on('error', () => { /* a caller going away is not our failure */ });
   });
 
+  // Chrome starts one of these per profile and tells it nothing about which, so
+  // the extension is asked. Its answer names the endpoint, which is what lets two
+  // profiles be connected at once. An extension from before the question falls
+  // back to the path every earlier release used, so it keeps the behaviour it
+  // had rather than landing somewhere new.
+  const identity = await askExtension('identify', {}, 3_000);
+  const claimed = identity?.ok ? (identity.data as { id?: unknown } | undefined)?.id : undefined;
+  const id = isEndpointId(claimed) ? claimed : LEGACY_ID;
+  if (id === LEGACY_ID) {
+    process.stderr.write(
+      'the extension in this profile does not say which profile it is, so this host is using the shared '
+      + 'endpoint. Reload the extension at chrome://extensions to give this profile its own.\n');
+  }
+
   // Asked before the endpoint is claimed, because a profile with nothing in it
   // must not take the endpoint from one the user is actually looking at.
   //
@@ -131,31 +156,25 @@ export async function main(): Promise<void> {
   // disk when that profile last loaded it. Relying on the extension to
   // self-restrict only works once every profile has been reloaded, which is not
   // something this can assume.
-  const drivable = await new Promise<boolean>((resolve) => {
-    const id = nextId++;
-    const timer = setTimeout(() => { waiting.delete(id); resolve(true); }, 3_000);
-    waiting.set(id, (reply) => {
-      clearTimeout(timer);
-      // An error here means the profile could not answer at all, which includes
-      // "No current window". Treated as not drivable.
-      if (!reply.ok) { resolve(false); return; }
-      const tabs = (reply.data as { tabs?: unknown[] } | undefined)?.tabs;
-      resolve(Array.isArray(tabs) && tabs.length > 0);
-    });
-    writeToChrome({ id, op: 'listTabs', args: {} as never });
-  });
+  const listed = await askExtension('listTabs', {}, 3_000);
+  // Silence is given the benefit of the doubt. An error means the profile could
+  // not answer at all, which includes "No current window", and is not drivable.
+  const drivable = listed === undefined
+    || (listed.ok && Array.isArray((listed.data as { tabs?: unknown[] } | undefined)?.tabs)
+      && ((listed.data as { tabs: unknown[] }).tabs.length > 0));
 
   if (!drivable) {
     process.stderr.write(
-      'this Chrome profile has no tabs, so it is not claiming the yoke endpoint: a caller driving it '
-      + 'would be operating a browser nobody can see. Another profile with windows open can have it.\n');
+      'this Chrome profile has no tabs, so it is not claiming a yoke endpoint: a caller driving it '
+      + 'would be operating a browser nobody can see.\n');
     process.exit(0);
   }
 
+  socketPath = endpointPathFor(id);
   prepareDirectory(socketPath);
   await claimEndpoint(socketPath);
   server.listen(socketPath, () => {
-    if (process.platform !== 'win32') { chmodSync(socketPath, 0o600); }
+    if (process.platform !== 'win32' && socketPath !== undefined) { chmodSync(socketPath, 0o600); }
   });
 
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
@@ -166,13 +185,13 @@ export async function main(): Promise<void> {
 /**
  * Takes the socket path, but only if nobody live is using it.
  *
- * The path is per user, not per Chrome profile, so two profiles with this
- * extension loaded each get their own host from Chrome and both want this
- * endpoint. Unlinking unconditionally, which is what this did, let the second
- * host steal it: the MCP server then reached whichever host bound last and drove
- * a different browser profile than the one the person was looking at, with no
- * error anywhere. Observed as `list_tabs` returning 0 while the visible window
- * held 40 tabs.
+ * The path is per profile now, so two live hosts wanting one path means a
+ * profile whose extension predates per-profile endpoints and so shares the old
+ * one, or a host Chrome has not finished stopping. When the path was per user
+ * this was the everyday case: unlinking unconditionally let the second profile's
+ * host steal it, and the MCP server then drove a different browser than the one
+ * the person was looking at, with no error anywhere. Observed as `list_tabs`
+ * returning 0 while the visible window held 40 tabs.
  *
  * So a connect is attempted first. Succeeding means a live host owns the path
  * and this one has nothing to offer: it exits, and Chrome surfaces that to the
@@ -194,10 +213,9 @@ async function claimEndpoint(socketPath: string): Promise<void> {
 
   if (alive) {
     process.stderr.write(
-      `another yoke host already owns ${socketPath}, which happens when a second Chrome profile `
-      + 'has the extension loaded. This one is exiting rather than taking the endpoint from it, '
-      + 'because doing so would point the server at a different browser profile. Disable the '
-      + 'extension in the profile you are not driving.\n');
+      `another yoke host already owns ${socketPath}. This one is exiting rather than taking it, `
+      + 'because doing so would point the server at a different browser profile. Each profile '
+      + 'gets its own endpoint once its extension has been reloaded at chrome://extensions.\n');
     process.exit(0);
   }
 

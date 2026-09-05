@@ -12,6 +12,10 @@
 // the extension directly and the socket in between is not optional.
 import { createInterface } from 'node:readline';
 
+import {
+  allTabs, askTab, chooseBrowser, displayName, endpointForTabs, unplace,
+  NoSuchBrowser, NoSuchTab, type Browser,
+} from './browsers.js';
 import { ask, ExtensionUnavailable } from './socket-client.js';
 
 export const SERVER_NAME = 'yoke';
@@ -57,10 +61,21 @@ export function shownUrl(url: string, full = false): string {
 
 export const TOOLS = [
   {
+    name: 'list_browsers',
+    description:
+      'The Chrome profiles yoke is connected to, one line each: id, label, how many tabs and '
+      + 'windows it has, and the sites it mostly has open, so a profile can be recognised even '
+      + 'before anyone has named it. Usually one. When there are more, list_tabs covers all of '
+      + 'them and every tab tool routes by tab id on its own; only open_tab needs to be told which '
+      + 'browser, by id or label. The label is set in the extension popup in that profile.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'list_tabs',
     description:
       'List every open tab in the browser, across all windows, with its id, title and URL. '
-      + 'Any tab it returns can be passed straight to the other tools. '
+      + 'Any tab it returns can be passed straight to the other tools. With more than one '
+      + 'Chrome profile connected, every profile is included and each row names its browser. '
       + 'URLs are reduced to origin and path by default, '
       + 'because a raw URL can carry credentials, a session token or a query string; pass '
       + 'full_urls to opt out.',
@@ -116,6 +131,12 @@ export const TOOLS = [
           type: 'string',
           default: 'yoke',
           description: 'The label on the group. Defaults to yoke, so the tab strip names what is driving it.',
+        },
+        browser: {
+          type: 'string',
+          description:
+            'Which Chrome profile to open the tab in, by id or label from list_browsers. Needed '
+            + 'only when more than one is connected; with one, it is implied.',
         },
       },
     },
@@ -348,25 +369,102 @@ function asTabId(value: unknown): number {
   return value;
 }
 
+/**
+ * The hosts a browser mostly has open, so a profile with no label is still
+ * recognisable: "mail.google.com, atlassian.net" reads as work to the person
+ * who owns it in a way a random id never will.
+ */
+function mostlyOpen(urls: string[], limit = 3): string {
+  const counts = new Map<string, number>();
+  for (const url of urls) {
+    try {
+      const { protocol, hostname } = new URL(url);
+      if (protocol !== 'http:' && protocol !== 'https:') { continue; }
+      counts.set(hostname, (counts.get(hostname) ?? 0) + 1);
+    } catch { /* not a site */ }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([host]) => host)
+    .join(', ');
+}
+
+/**
+ * A refusal the model can act on comes back as a tool result, not a transport
+ * error: "tab 999 is not open anywhere" is an answer, and a JSON-RPC error is
+ * how a client learns the server is broken.
+ */
 export async function callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  try {
+    return await dispatch(name, args);
+  } catch (failure) {
+    if (failure instanceof NoSuchTab || failure instanceof NoSuchBrowser) { return failed(failure.message); }
+    throw failure;
+  }
+}
+
+async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  if (name === 'list_browsers') {
+    const { browsers, tabs } = await allTabs();
+    if (browsers.length === 0) {
+      throw new ExtensionUnavailable(
+        'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+    }
+    const lines = browsers.map((browser) => {
+      const own = tabs.filter((tab) => tab.browser === browser);
+      const windows = new Set(own.map((tab) => tab.windowId)).size;
+      const label = browser.unidentified
+        ? '(unidentified: reload the extension in this profile at chrome://extensions)'
+        : browser.label === '' ? '(unnamed)' : browser.label;
+      return `${browser.id}\t${label}\t${own.length} tab(s)\t${windows} window(s)\t${mostlyOpen(own.map((tab) => tab.url))}`;
+    });
+    const hint = browsers.some((browser) => browser.label === '' && !browser.unidentified)
+      ? '\nA label is set in the yoke popup of that profile, and is the easier name to pass to open_tab.'
+      : '';
+    return text(`${browsers.length} browser(s) connected.\nid\tlabel\ttabs\twindows\tmostly\n${lines.join('\n')}${hint}`);
+  }
+
   if (name === 'list_tabs') {
-    const { tabs } = await ask('listTabs');
+    const { browsers, tabs } = await allTabs();
+    if (browsers.length === 0) {
+      throw new ExtensionUnavailable(
+        'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+    }
     if (tabs.length === 0) {
       return text('No tabs reported, which should not happen while a browser is open.');
     }
     const full = args['full_urls'] === true;
-    const lines = tabs.map((tab) => `${tab.id}\t${shownUrl(tab.url, full)}\t${tab.title.slice(0, 80)}`);
-    return text(`${tabs.length} open tab(s), every window included.\nid\turl\ttitle\n${lines.join('\n')}`);
+    // The browser column appears only when there is a choice to show. One
+    // profile reads exactly as it always has.
+    const several = browsers.length > 1;
+    const lines = tabs.map((tab) =>
+      `${tab.id}\t${shownUrl(tab.url, full)}\t${tab.title.slice(0, 80)}${several ? `\t${displayName(tab.browser)}` : ''}`);
+    const head = several
+      ? `${tabs.length} open tab(s) across ${browsers.length} browsers, every window included.\nid\turl\ttitle\tbrowser`
+      : `${tabs.length} open tab(s), every window included.\nid\turl\ttitle`;
+    return text(`${head}\n${lines.join('\n')}`);
   }
 
   if (name === 'list_tab_groups') {
-    const [{ groups }, { tabs }] = await Promise.all([ask('listGroups'), ask('listTabs')]);
+    const { browsers, tabs } = await allTabs();
+    if (browsers.length === 0) {
+      throw new ExtensionUnavailable(
+        'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+    }
+    const several = browsers.length > 1;
+    const listed = await Promise.all(browsers.map(async (browser) => {
+      const { groups } = await ask(browser.endpoint, 'listGroups');
+      return groups.map((group) => ({ group, browser }));
+    }));
+    const groups = listed.flat();
     if (groups.length === 0) { return text('No tab groups.'); }
-    const lines = groups.map((group) => {
-      const members = tabs.filter((tab) => tab.groupId === group.id).length;
-      return `${group.id}\t${JSON.stringify(group.title)}\t${group.color}\t${members} tab(s)`;
+    const lines = groups.map(({ group, browser }) => {
+      const members = tabs.filter((tab) => tab.browser === browser && tab.groupId === group.id).length;
+      return `${group.id}\t${JSON.stringify(group.title)}\t${group.color}\t${members} tab(s)${several ? `\t${displayName(browser)}` : ''}`;
     });
-    return text(`${groups.length} group(s).\nid\ttitle\tcolour\tmembers\n${lines.join('\n')}`);
+    const head = several ? 'id\ttitle\tcolour\tmembers\tbrowser' : 'id\ttitle\tcolour\tmembers';
+    return text(`${groups.length} group(s).\n${head}\n${lines.join('\n')}`);
   }
 
   if (name === 'navigate') {
@@ -378,7 +476,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
       return failed(`navigate takes an http or https URL, not ${JSON.stringify(url)}`);
     }
     const timeoutMs = typeof args['timeout_ms'] === 'number' ? args['timeout_ms'] : undefined;
-    const moved = await ask('navigate', {
+    const moved = await askTab('navigate', {
       tabId,
       url,
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -397,11 +495,16 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     const groupTitle = args['group_title'] === undefined
       ? DEFAULT_GROUP_TITLE
       : String(args['group_title']);
-    const opened = await ask('openTab', {
+    // The one call that names no tab, so the browser has to be named instead
+    // when there is more than one to choose from.
+    const browser: Browser = await chooseBrowser(args['browser'], 'open_tab');
+    const opened = await ask(browser.endpoint, 'openTab', {
       ...(url === undefined ? {} : { url }),
       active: args['active'] === true,
       groupTitle,
     });
+    // The id is new to the router, and may not be new to another browser.
+    unplace(opened.tab.id);
     // Three outcomes, not two. A reply with no groupId at all comes from an
     // extension build older than this server, and saying so beats printing the
     // word "undefined" at whoever is reading.
@@ -414,13 +517,13 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
   }
 
   if (name === 'close_tab') {
-    const { closed } = await ask('closeTab', { tabId: asTabId(args['tab_id']) });
+    const { closed } = await askTab('closeTab', { tabId: asTabId(args['tab_id']) });
     return text(`Closed tab ${closed}.`);
   }
 
   if (name === 'get_page_text') {
     const maxChars = typeof args['max_chars'] === 'number' ? args['max_chars'] : undefined;
-    const page = await ask('getPageText', {
+    const page = await askTab('getPageText', {
       tabId: asTabId(args['tab_id']),
       ...(maxChars === undefined ? {} : { maxChars }),
     });
@@ -430,7 +533,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
   if (name === 'read_page' || name === 'find') {
     const maxElements = typeof args['max_elements'] === 'number' ? args['max_elements'] : undefined;
-    const page = await ask('readPage', {
+    const page = await askTab('readPage', {
       tabId: asTabId(args['tab_id']),
       ...(maxElements === undefined ? {} : { maxElements }),
     });
@@ -455,7 +558,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
   if (name === 'click') {
     const button = args['button'];
     const clickCount = typeof args['click_count'] === 'number' ? args['click_count'] : undefined;
-    const result = await ask('click', {
+    const result = await askTab('click', {
       tabId: asTabId(args['tab_id']),
       ref: String(args['ref'] ?? ''),
       ...(button === 'left' || button === 'right' || button === 'middle' ? { button } : {}),
@@ -480,7 +583,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
   if (name === 'type_text') {
     const ref = args['ref'] === undefined ? undefined : String(args['ref']);
-    const typed = await ask('typeText', {
+    const typed = await askTab('typeText', {
       tabId: asTabId(args['tab_id']),
       text: String(args['text'] ?? ''),
       ...(ref === undefined ? {} : { ref }),
@@ -491,7 +594,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
   if (name === 'press_key') {
     const ref = args['ref'] === undefined ? undefined : String(args['ref']);
-    const pressed = await ask('pressKey', {
+    const pressed = await askTab('pressKey', {
       tabId: asTabId(args['tab_id']),
       key: String(args['key'] ?? ''),
       ...(ref === undefined ? {} : { ref }),
@@ -503,7 +606,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     const ref = args['ref'] === undefined ? undefined : String(args['ref']);
     const dx = typeof args['dx'] === 'number' ? args['dx'] : undefined;
     const dy = typeof args['dy'] === 'number' ? args['dy'] : undefined;
-    const moved = await ask('scroll', {
+    const moved = await askTab('scroll', {
       tabId: asTabId(args['tab_id']),
       ...(dx === undefined ? {} : { dx }),
       ...(dy === undefined ? {} : { dy }),
@@ -515,7 +618,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
   if (name === 'screenshot') {
     const format = args['format'] === 'jpeg' ? 'jpeg' : 'png';
     const quality = typeof args['quality'] === 'number' ? args['quality'] : undefined;
-    const shot = await ask('screenshot', {
+    const shot = await askTab('screenshot', {
       tabId: asTabId(args['tab_id']),
       format,
       ...(quality === undefined ? {} : { quality }),
@@ -531,7 +634,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
   }
 
   if (name === 'run_javascript') {
-    const outcome = await ask('evaluate', {
+    const outcome = await askTab('evaluate', {
       tabId: asTabId(args['tab_id']),
       expression: String(args['expression'] ?? ''),
     }, { timeoutMs: 30_000 });
@@ -544,7 +647,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
   if (name === 'read_console') {
     const limit = typeof args['limit'] === 'number' ? args['limit'] : undefined;
-    const seen = await ask('consoleMessages', {
+    const seen = await askTab('consoleMessages', {
       tabId: asTabId(args['tab_id']),
       ...(limit === undefined ? {} : { limit }),
     });
@@ -558,7 +661,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
 
   if (name === 'read_network') {
     const limit = typeof args['limit'] === 'number' ? args['limit'] : undefined;
-    const seen = await ask('networkRequests', {
+    const seen = await askTab('networkRequests', {
       tabId: asTabId(args['tab_id']),
       ...(limit === undefined ? {} : { limit }),
     });
@@ -577,12 +680,12 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
     }
     const tabIds = raw.map((value) => asTabId(value));
     if (name === 'ungroup_tabs') {
-      await ask('ungroupTabs', { tabIds });
+      await ask(await endpointForTabs(tabIds), 'ungroupTabs', { tabIds });
       return text(`Ungrouped ${tabIds.length} tab(s). They are still open.`);
     }
     const title = args['title'] === undefined ? DEFAULT_GROUP_TITLE : String(args['title']);
     const color = args['color'] === undefined ? undefined : String(args['color']);
-    const grouped = await ask('groupTabs', {
+    const grouped = await ask(await endpointForTabs(tabIds), 'groupTabs', {
       tabIds,
       ...(title === undefined ? {} : { title }),
       ...(color === undefined ? {} : { color }),
@@ -592,7 +695,7 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
   }
 
   if (name === 'release_tab') {
-    const released = await ask('release', { tabId: asTabId(args['tab_id']) });
+    const released = await askTab('release', { tabId: asTabId(args['tab_id']) });
     return text(released.released
       // Says what detaching does and no more. The tab keeps its group because
       // releasing is not unmarking.

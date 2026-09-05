@@ -9,8 +9,9 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { connectedBrowsers, displayName, type Browser } from './browsers.js';
 import { browserDirs, EXTENSION_IDS, HOST_NAME, type HostManifest } from './install.js';
-import { endpointPath } from './socket-path.js';
+import { endpointDir, listEndpoints } from './socket-path.js';
 import { ask } from './socket-client.js';
 
 export interface Check {
@@ -113,42 +114,82 @@ function checkRegistration(): Check {
 }
 
 /**
- * Has Chrome started the host?
+ * Has Chrome started a host?
  *
- * The socket exists only while the host runs, and Chrome only runs it while the
- * extension holds the port open. So an absent socket almost always means the
- * extension is not loaded or its service worker is asleep.
+ * A socket exists only while its host runs, and Chrome only runs a host while
+ * the extension holds the port open. So no socket at all almost always means the
+ * extension is not loaded or its service worker is asleep. There is one per
+ * Chrome profile, so several is normal when several profiles have it loaded.
  */
-function checkSocket(): Check {
-  const socket = endpointPath();
+function checkSockets(): Check {
   if (process.platform === 'win32') {
     return { ok: true, label: 'host running', detail: 'named pipes cannot be probed by existence; the ping below is the real check' };
   }
-  return existsSync(socket)
-    ? { ok: true, label: 'host running', detail: socket }
-    : {
+  const found = listEndpoints();
+  if (found.length === 0) {
+    return {
       ok: false,
       label: 'host running',
-      detail: `no socket at ${socket}`,
+      detail: `no socket in ${endpointDir()}`,
       fix: `load ${join(extensionRoot(), 'extension')} at chrome://extensions with Developer mode on`,
     };
+  }
+  return {
+    ok: true,
+    label: 'host running',
+    detail: found.length === 1 ? (found[0] as string) : `${found.length} sockets in ${endpointDir()}, one per profile`,
+  };
 }
 
-/** Does the extension itself answer? */
-async function checkPing(): Promise<Check> {
+/** Which profiles answered, named so the caller can tell which browser each one is. */
+async function checkBrowsers(): Promise<{ check: Check; browsers: Browser[] }> {
+  const browsers = await connectedBrowsers();
+  if (browsers.length === 0) {
+    return {
+      browsers,
+      check: {
+        ok: false,
+        label: 'extension',
+        detail: 'a socket exists but no host behind it answered',
+        fix: 'open chrome://extensions and check the service worker is running',
+      },
+    };
+  }
+  return {
+    browsers,
+    check: {
+      ok: true,
+      label: 'browsers',
+      detail: browsers.map((browser) => describe(browser)).join('; '),
+    },
+  };
+}
+
+/** "work (a1b2c3d4)", or just the id, or a note that the extension is too old to say. */
+function describe(browser: Browser): string {
+  if (browser.unidentified) {
+    return 'one profile on the shared legacy endpoint, whose extension cannot yet say which it is: '
+      + 'reload it at chrome://extensions';
+  }
+  return browser.label === '' ? `${browser.id} (unnamed, name it in the popup)` : `${browser.label} (${browser.id})`;
+}
+
+/** Does the extension in this profile answer? */
+async function checkPing(browser: Browser, several: boolean): Promise<Check> {
+  const label = several ? `extension ${displayName(browser)}` : 'extension';
   try {
-    const { extension, attached } = await ask('ping', {}, { timeoutMs: 3_000 });
+    const { extension, attached } = await ask(browser.endpoint, 'ping', {}, { timeoutMs: 3_000 });
     // Reported because a tab left attached wears Chrome's debugging bar and
     // refuses DevTools, and nothing used to say how many were in that state.
     const held = attached?.length ?? 0;
     const holding = held === 0
       ? ''
       : `, holding ${held} tab(s): ${attached.join(', ')}. Release them with release_tab.`;
-    return { ok: true, label: 'extension', detail: `answered, version ${extension}${holding}` };
+    return { ok: true, label, detail: `answered, version ${extension}${holding}` };
   } catch (failure) {
     return {
       ok: false,
-      label: 'extension',
+      label,
       detail: failure instanceof Error ? failure.message : String(failure),
       fix: 'open chrome://extensions and check the service worker is running',
     };
@@ -161,19 +202,20 @@ async function checkPing(): Promise<Check> {
  * Reported as a count and as how many sit outside any group, because the second
  * number is the one a tab-group-scoped bridge cannot see at all.
  */
-async function checkTabs(): Promise<Check> {
+async function checkTabs(browser: Browser, several: boolean): Promise<Check> {
+  const label = several ? `tabs ${displayName(browser)}` : 'tabs visible';
   try {
-    const { tabs } = await ask('listTabs', {}, { timeoutMs: 5_000 });
+    const { tabs } = await ask(browser.endpoint, 'listTabs', {}, { timeoutMs: 5_000 });
     const ungrouped = tabs.filter((tab) => tab.groupId === -1).length;
     return {
       ok: tabs.length > 0,
-      label: 'tabs visible',
+      label,
       detail: `${tabs.length} tab(s), ${ungrouped} of them in no tab group`,
     };
   } catch (failure) {
     return {
       ok: false,
-      label: 'tabs visible',
+      label,
       detail: failure instanceof Error ? failure.message : String(failure),
     };
   }
@@ -181,21 +223,29 @@ async function checkTabs(): Promise<Check> {
 
 /** Runs the checks in order, stopping the remote ones once a local one fails. */
 export async function doctor(): Promise<Check[]> {
-  const checks: Check[] = [checkBuild(), checkRegistration(), checkSocket()];
+  const checks: Check[] = [checkBuild(), checkRegistration(), checkSockets()];
   // No point asking the extension anything when the socket is not even there:
   // the answer would be the same timeout dressed up as two failures.
-  if (checks.every((check) => check.ok)) {
-    checks.push(await checkPing());
-    if (checks[checks.length - 1]?.ok) { checks.push(await checkTabs()); }
+  if (!checks.every((check) => check.ok)) { return checks; }
+  const { check, browsers } = await checkBrowsers();
+  checks.push(check);
+  // Each connected profile is checked on its own, because "the extension
+  // answered" from one says nothing about the other.
+  const several = browsers.length > 1;
+  for (const browser of browsers) {
+    const ping = await checkPing(browser, several);
+    checks.push(ping);
+    if (ping.ok) { checks.push(await checkTabs(browser, several)); }
   }
   return checks;
 }
 
 export function render(checks: Check[]): string {
+  const width = Math.max(14, ...checks.map((check) => check.label.length));
   const lines = checks.map((check) => {
     const mark = check.ok ? 'ok  ' : 'FAIL';
     const fix = check.ok || !check.fix ? '' : `\n        fix: ${check.fix}`;
-    return `${mark}  ${check.label.padEnd(14)} ${check.detail}${fix}`;
+    return `${mark}  ${check.label.padEnd(width)} ${check.detail}${fix}`;
   });
   const broken = checks.find((check) => !check.ok);
   lines.push('');

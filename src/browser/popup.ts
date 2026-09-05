@@ -5,8 +5,9 @@
 // install has nothing to show and no way to explain itself, which reads as
 // "requests six sensitive permissions, does nothing".
 //
-// So this answers three questions in the order someone asks them: is the local
-// half installed, which tabs are currently being driven, and how do I stop it.
+// So this answers four questions in the order someone asks them: is the local
+// half installed, which profile is this, which tabs are currently being driven,
+// and how do I stop it.
 import type { PopupReply, PopupRequest } from './messages.js';
 
 const ask = (request: PopupRequest): Promise<PopupReply> =>
@@ -48,7 +49,60 @@ async function render(): Promise<void> {
   }
 
   el('idle').hidden = held > 0;
+
+  // A worker older than this popup answers status without an id. Chrome reads
+  // an unpacked extension's popup files from disk on every open but keeps the
+  // running worker until it is reloaded, so after a rebuild the two disagree
+  // and a Save would go to a worker that has never heard of it. The form is
+  // replaced by the one thing that helps.
+  const stale = typeof status.id !== 'string';
+  el('label-form').hidden = stale;
+  el('stale').hidden = !stale;
+  if (stale) { return; }
+
+  // The id is how the server tells this profile from another one, and the label
+  // is how a person does. Shown so what list_browsers prints can be matched to
+  // the window it came from.
+  el('profile-id').textContent = status.id;
+  const input = el('label') as HTMLInputElement;
+  if (document.activeElement !== input && input.value !== status.label) { input.value = status.label; }
 }
+
+el('label-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const input = el('label') as HTMLInputElement;
+  const button = el('save') as HTMLButtonElement;
+  button.disabled = true;
+  // Its own element, because writing the outcome into the paragraph that
+  // holds the id would delete the id, and the next refresh would then fail.
+  const note = el('label-note');
+  note.hidden = false;
+  void ask({ kind: 'setLabel', label: input.value })
+    .then((reply) => {
+      if (reply?.kind === 'labelled') {
+        input.value = reply.label;
+        note.textContent = reply.label === '' ? 'Name cleared.' : `Saved. Tools now show this profile as ${reply.label}.`;
+        return;
+      }
+      // Either the worker reported a failure, or it is too old to answer at all
+      // and Chrome resolved the call with nothing.
+      note.textContent = reply?.kind === 'failed'
+        ? `Could not save: ${reply.reason}`
+        : 'Not saved: the extension\'s running code predates this field. Reload Yoke at chrome://extensions.';
+    })
+    .catch((thrown: unknown) => {
+      note.textContent = `Could not save: ${thrown instanceof Error ? thrown.message : String(thrown)}`;
+    })
+    .finally(() => { button.disabled = false; void render(); });
+});
+
+// Enter in the field saves. Stated rather than left to implicit submission,
+// which not every key event source triggers.
+el('label').addEventListener('keydown', (event) => {
+  if ((event as KeyboardEvent).key !== 'Enter') { return; }
+  event.preventDefault();
+  (el('label-form') as HTMLFormElement).requestSubmit();
+});
 
 el('release').addEventListener('click', () => {
   const button = el('release') as HTMLButtonElement;

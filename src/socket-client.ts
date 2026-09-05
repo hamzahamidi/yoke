@@ -1,4 +1,4 @@
-// Talking to the extension through the host's socket.
+// Talking to the extension through a host's socket.
 //
 // Every call here is allowed to fail with a reason. The extension is optional
 // infrastructure: it may not be installed, or Chrome may not have started the
@@ -6,7 +6,6 @@
 import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
 
-import { endpointPath } from './socket-path.js';
 import {
   PROTOCOL,
   type ArgsOf,
@@ -26,25 +25,26 @@ const isSocketReply = (value: unknown): value is SocketReply =>
   typeof value === 'object' && value !== null && 'ok' in value;
 
 /**
- * One request over the socket, one reply.
+ * One request over one host's socket, one reply.
  *
  * The host owns request matching, so this only has to write a line and read the
- * first one back.
+ * first one back. Which host is the caller's decision: there is one per Chrome
+ * profile, and `browsers.ts` is where that choice is made.
  */
 export function ask<K extends OperationName>(
+  endpoint: string,
   op: K,
   args: ArgsOf<K> = {} as ArgsOf<K>,
   { timeoutMs = DEFAULT_TIMEOUT_MS }: { timeoutMs?: number } = {},
 ): Promise<ResultOf<K>> {
-  const socketPath = endpointPath();
   return new Promise<ResultOf<K>>((resolve, reject) => {
-    if (process.platform !== 'win32' && !existsSync(socketPath)) {
+    if (process.platform !== 'win32' && !existsSync(endpoint)) {
       reject(new ExtensionUnavailable(
         'the extension is not connected. Run `yoke install`, then load it in Chrome.'));
       return;
     }
 
-    const socket = createConnection(socketPath);
+    const socket = createConnection(endpoint);
     let text = '';
     let settled = false;
     const finish = (action: () => void): void => {
@@ -94,14 +94,4 @@ export function ask<K extends OperationName>(
       finish(() => reject(new ExtensionUnavailable(`the extension is not reachable: ${failure.message}`)));
     });
   });
-}
-
-/** Whether the extension answers at all. Used by `status`, never to gate a call. */
-export async function available(): Promise<boolean> {
-  try {
-    await ask('ping', {}, { timeoutMs: 2_000 });
-    return true;
-  } catch {
-    return false;
-  }
 }
