@@ -27,7 +27,9 @@ const SAFE_ID = /^[a-z0-9]{1,32}$/;
 export const isEndpointId = (value: unknown): value is string =>
   typeof value === 'string' && SAFE_ID.test(value);
 
-const pipePrefix = (): string => `yoke-${process.env['USERNAME'] ?? 'user'}-`;
+/** The pipe name every release before per-profile endpoints used on Windows. */
+const legacyPipe = (): string => `yoke-${process.env['USERNAME'] ?? 'user'}`;
+const pipePrefix = (): string => `${legacyPipe()}-`;
 
 /**
  * Kept out of /tmp so another user cannot pre-create it, and out of the
@@ -43,7 +45,9 @@ export function endpointPathFor(id: string): string {
     throw new Error(`${JSON.stringify(id)} is not a usable endpoint id`);
   }
   if (process.platform === 'win32') {
-    return `\\\\.\\pipe\\${pipePrefix()}${id}`;
+    // The legacy id maps to the bare pre-existing name, not to a suffixed one,
+    // so an extension that has not been reloaded lands where it always did.
+    return `\\\\.\\pipe\\${id === LEGACY_ID ? legacyPipe() : `${pipePrefix()}${id}`}`;
   }
   return join(endpointDir(), `${id}.sock`);
 }
@@ -51,6 +55,7 @@ export function endpointPathFor(id: string): string {
 /** The id a path was made from, or undefined for a file that is not one of ours. */
 export function endpointIdOf(path: string): string | undefined {
   const name = path.split(/[\\/]/).pop() ?? '';
+  if (process.platform === 'win32' && name === legacyPipe()) { return LEGACY_ID; }
   const match = process.platform === 'win32'
     ? (name.startsWith(pipePrefix()) ? name.slice(pipePrefix().length) : undefined)
     : (name.endsWith('.sock') ? name.slice(0, -'.sock'.length) : undefined);
@@ -69,7 +74,7 @@ export function listEndpoints(): string[] {
   if (process.platform === 'win32') {
     try {
       return readdirSync('\\\\.\\pipe\\')
-        .filter((name) => name.startsWith(pipePrefix()))
+        .filter((name) => name === legacyPipe() || name.startsWith(pipePrefix()))
         .map((name) => `\\\\.\\pipe\\${name}`)
         .filter((path) => endpointIdOf(path) !== undefined);
     } catch {
