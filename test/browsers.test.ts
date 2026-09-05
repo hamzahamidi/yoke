@@ -229,6 +229,51 @@ test('a tab id two browsers both report is refused, naming both', { skip }, asyn
   });
 });
 
+test('a browser that connects after a tab was placed is noticed, and a new collision refused', { skip }, async () => {
+  const brave: FakeHost = {
+    id: 'ffffffff',
+    label: 'brave',
+    tabs: [{ id: 11, windowId: 7, url: 'https://example.org/', title: 'same id, other browser' }],
+    received: [],
+  };
+  const a = fresh(work);
+  await withHosts([a], async (dir) => {
+    // Placed while only one browser is connected.
+    const first = await call('get_page_text', { tab_id: 11 });
+    assert.equal(first.isError, undefined);
+    // A second browser connects with a tab of the same id. Nothing has relisted.
+    const late = await serve(dir, brave);
+    try {
+      const second = await call('get_page_text', { tab_id: 11 });
+      assert.equal(second.isError, true, 'the cached placement must not be trusted once the browsers changed');
+      assert.match(second.content[0]?.text ?? '', /a1b2c3d4/);
+      assert.match(second.content[0]?.text ?? '', /brave/);
+      assert.equal(a.received.filter((op) => op === 'getPageText').length, 1, 'the ambiguous call was not sent');
+    } finally {
+      late.close();
+    }
+  });
+});
+
+test('group and ungroup refuse tabs that live in different browsers, naming where each is', { skip }, async () => {
+  const a = fresh(work);
+  const b = fresh(personal);
+  await withHosts([a, b], async () => {
+    const grouped = await call('group_tabs', { tab_ids: [11, 200] });
+    assert.equal(grouped.isError, true);
+    assert.match(grouped.content[0]?.text ?? '', /11 .*a1b2c3d4/);
+    assert.match(grouped.content[0]?.text ?? '', /200 .*personal/);
+    const ungrouped = await call('ungroup_tabs', { tab_ids: [200, 11] });
+    assert.equal(ungrouped.isError, true);
+    assert.ok(!a.received.includes('groupTabs') && !b.received.includes('groupTabs'), 'nothing was dispatched');
+    assert.ok(!a.received.includes('ungroupTabs') && !b.received.includes('ungroupTabs'), 'nothing was dispatched');
+    // Same browser: dispatched to it, once.
+    const missing = await call('group_tabs', { tab_ids: [11, 999] });
+    assert.equal(missing.isError, true);
+    assert.match(missing.content[0]?.text ?? '', /999/);
+  });
+});
+
 test('a host whose extension predates identify is still reachable, and says so', { skip }, async () => {
   const old: FakeHost = { ...fresh(work), id: 'extension', legacy: true };
   await withHosts([old], async () => {

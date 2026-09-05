@@ -13,7 +13,7 @@
 import { createInterface } from 'node:readline';
 
 import {
-  allTabs, askTab, chooseBrowser, displayName, endpointForTab,
+  allTabs, askTab, chooseBrowser, displayName, endpointForTabs,
   NoSuchBrowser, NoSuchTab, type Browser,
 } from './browsers.js';
 import { ask, ExtensionUnavailable } from './socket-client.js';
@@ -678,12 +678,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     }
     const tabIds = raw.map((value) => asTabId(value));
     if (name === 'ungroup_tabs') {
-      await ask(await endpointForTab(tabIds[0] as number), 'ungroupTabs', { tabIds });
+      await ask(await endpointForTabs(tabIds), 'ungroupTabs', { tabIds });
       return text(`Ungrouped ${tabIds.length} tab(s). They are still open.`);
     }
     const title = args['title'] === undefined ? DEFAULT_GROUP_TITLE : String(args['title']);
     const color = args['color'] === undefined ? undefined : String(args['color']);
-    const grouped = await ask(await endpointForTab(tabIds[0] as number), 'groupTabs', {
+    const grouped = await ask(await endpointForTabs(tabIds), 'groupTabs', {
       tabIds,
       ...(title === undefined ? {} : { title }),
       ...(color === undefined ? {} : { color }),

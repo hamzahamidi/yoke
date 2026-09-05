@@ -58,10 +58,18 @@ const AMBIGUOUS = '\0ambiguous';
  * server is running, and a cached one would keep answering with the old name.
  */
 let placement = new Map<number, string>();
+/** The endpoints the placement was built from, so a change in them invalidates it. */
+let placedFrom = '';
+/** The browsers as of the last listing, for naming an endpoint in a refusal. */
+let lastBrowsers = new Map<string, Browser>();
+
+const endpointSignature = (): string => listEndpoints().join('\n');
 
 /** Drops every cached fact. For tests, which change the endpoint directory. */
 export function forget(): void {
   placement = new Map();
+  placedFrom = '';
+  lastBrowsers = new Map();
 }
 
 async function identify(endpoint: string): Promise<Browser | undefined> {
@@ -110,6 +118,8 @@ export async function allTabs(): Promise<{ browsers: Browser[]; tabs: PlacedTab[
   }));
   const tabs = listed.flat();
   placement = new Map();
+  placedFrom = endpointSignature();
+  lastBrowsers = new Map(browsers.map((browser) => [browser.endpoint, browser]));
   for (const tab of tabs) {
     const already = placement.get(tab.id);
     if (already === undefined) {
@@ -172,11 +182,13 @@ export async function chooseBrowser(selector: unknown, tool: string): Promise<Br
  * good thing to be asked about.
  */
 export async function endpointForTab(tabId: number): Promise<string> {
-  let endpoint = placement.get(tabId);
-  if (endpoint === undefined) {
+  // A browser that connected or left since the placement was built can have
+  // introduced a collision the cache knows nothing about, so the cache is
+  // trusted only while the endpoints it was built from are the ones on disk.
+  if (placement.get(tabId) === undefined || endpointSignature() !== placedFrom) {
     await allTabs();
-    endpoint = placement.get(tabId);
   }
+  const endpoint = placement.get(tabId);
   if (endpoint === AMBIGUOUS) {
     const { tabs } = await allTabs();
     const owners = tabs.filter((tab) => tab.id === tabId).map((tab) => displayName(tab.browser));
@@ -191,6 +203,27 @@ export async function endpointForTab(tabId: number): Promise<string> {
       'the extension is not connected. Run `yoke install`, then load it in Chrome.');
   }
   throw new NoSuchTab(`tab ${tabId} is not open in any connected browser. Call list_tabs for ids that are.`);
+}
+
+/**
+ * The one endpoint holding every one of these tabs.
+ *
+ * Refused when they are spread across browsers, with each tab's browser named,
+ * because an operation on several tabs goes to one browser and the others
+ * would fail there with a message about a tab that does exist, elsewhere.
+ */
+export async function endpointForTabs(tabIds: number[]): Promise<string> {
+  const endpoints = await Promise.all(tabIds.map((tabId) => endpointForTab(tabId)));
+  const distinct = new Set(endpoints);
+  const only = endpoints[0];
+  if (distinct.size === 1 && only !== undefined) { return only; }
+  const where = tabIds.map((tabId, index) => {
+    const browser = lastBrowsers.get(endpoints[index] ?? '');
+    return `tab ${tabId} is in ${browser === undefined ? 'an unknown browser' : displayName(browser)}`;
+  });
+  throw new NoSuchTab(
+    `those ${tabIds.length} tabs are in ${distinct.size} different browsers: ${where.join(', ')}. `
+    + 'An operation on several tabs goes to one browser, so name tabs from one at a time.');
 }
 
 /** Sends an operation to whichever browser holds the tab it names. */
