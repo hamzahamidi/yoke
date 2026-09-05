@@ -1,6 +1,6 @@
 {
   "name": "yoke-mcp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "MCP server for the Chrome you are already signed in to. Every tab in every window, addressed by tab id, with no second profile and no browser-wide debugging port.",
   "bin": {
     "yoke": "dist/cli.js"
