@@ -201,6 +201,19 @@ test('open_tab with two browsers connected needs one named, by id or by label', 
   });
 });
 
+test('a label two profiles share is refused for open_tab, with the ids to choose from', { skip }, async () => {
+  const twin: FakeHost = { ...fresh(work), id: 'c0ffee00', label: 'personal' };
+  await withHosts([twin, fresh(personal)], async () => {
+    const ambiguous = await call('open_tab', { url: 'https://example.com', browser: 'personal' });
+    assert.equal(ambiguous.isError, true);
+    assert.match(ambiguous.content[0]?.text ?? '', /2 connected browsers are labelled "personal"/);
+    assert.match(ambiguous.content[0]?.text ?? '', /c0ffee00/);
+    assert.match(ambiguous.content[0]?.text ?? '', /e5f6a7b8/);
+    const byId = await call('open_tab', { url: 'https://example.com', browser: 'e5f6a7b8' });
+    assert.equal(byId.isError, undefined);
+  });
+});
+
 test('a tab id two browsers both report is refused, naming both', { skip }, async () => {
   const brave: FakeHost = {
     id: 'ffffffff',

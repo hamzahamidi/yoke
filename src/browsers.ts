@@ -144,8 +144,18 @@ export async function chooseBrowser(selector: unknown, tool: string): Promise<Br
       + 'browser with an id or label from list_browsers.');
   }
   const wanted = String(selector);
-  const match = browsers.find((browser) => browser.id === wanted)
-    ?? browsers.find((browser) => browser.label.toLowerCase() === wanted.toLowerCase());
+  const byId = browsers.find((browser) => browser.id === wanted);
+  if (byId !== undefined) { return byId; }
+  // Labels are typed by a person and nothing stops two profiles getting the
+  // same one, so a label that fits more than one is refused with the ids,
+  // which cannot collide.
+  const byLabel = browsers.filter((browser) => browser.label.toLowerCase() === wanted.toLowerCase());
+  if (byLabel.length > 1) {
+    const ids = byLabel.map((browser) => `${browser.id} (${browser.tabs} tab(s))`).join(', ');
+    throw new NoSuchBrowser(
+      `${byLabel.length} connected browsers are labelled ${JSON.stringify(wanted)}: ${ids}. Pass the id of the one you mean.`);
+  }
+  const match = byLabel[0];
   if (match === undefined) {
     const names = browsers.map((browser) => displayName(browser)).join(', ');
     throw new NoSuchBrowser(`no connected browser is ${JSON.stringify(wanted)}. Connected: ${names}.`);
