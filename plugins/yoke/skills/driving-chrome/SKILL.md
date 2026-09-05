@@ -47,12 +47,32 @@ silently clicked.
 
 | Job | Tools |
 | --- | --- |
-| See | `list_tabs`, `list_tab_groups` |
+| See | `list_browsers`, `list_tabs`, `list_tab_groups` |
 | Move | `open_tab`, `navigate`, `close_tab` |
 | Read | `get_page_text`, `read_page`, `find`, `screenshot` |
 | Act | `click`, `type_text`, `press_key`, `scroll`, `run_javascript` |
 | Diagnose | `read_console`, `read_network`, `release_tab` |
 | Label | `group_tabs`, `ungroup_tabs` |
+
+## More than one Chrome profile
+
+The extension can be loaded in several profiles, and each one is reachable.
+`list_browsers` says which are connected: an id, the label the user gave it in
+the popup (or `(unnamed)`), tab and window counts, and the sites it mostly has
+open, which is usually enough to tell work from personal.
+
+With one profile connected nothing is different. With more:
+
+- `list_tabs` includes every profile and adds a `browser` column.
+- Every tool that takes a `tab_id` reaches the right profile on its own. Tab ids
+  are unique across profiles, so the id is the address.
+- `open_tab` needs `browser`, an id or label from `list_browsers`, and refuses
+  rather than guessing. A page signed in only in one profile has to be opened
+  there, which is the whole reason to look at `list_browsers` first.
+
+A sign-in page where a session was expected, with more than one browser listed,
+usually means the tab is in the other profile. Check `list_browsers` before
+concluding the user is signed out.
 
 ## Verify rather than assume
 
@@ -103,11 +123,9 @@ silently clicked.
 - **Only the top frame is read.** Content in an iframe, and elements inside a
   shadow root, are not in the snapshot.
 - **Tab ids change when Chrome restarts.**
-- **One Chrome profile at a time.** If the extension is loaded in two profiles,
-  only one host owns the endpoint and the other reports not connected, so the
-  tools may be driving a different profile than the visible window. `list_tabs`
-  returning no tabs while the user plainly has tabs open is that situation:
-  disable the extension in the profile not being driven.
+- **Two different browsers can share a tab id.** Chrome and Brave, say, each
+  number their own tabs, so if both run the extension a tab id they both report
+  is refused rather than routed. Two profiles of one Chrome never collide.
 
 ## Never do this
 

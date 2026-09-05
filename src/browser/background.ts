@@ -18,6 +18,7 @@ import {
   pressKey as dispatchKey, screenshot as capture, scrollBy, attachedTabIds,
 } from './cdp.js';
 import { collectSnapshot, locateRef, type Located } from './snapshot.js';
+import { identity, setLabel } from './identity.js';
 import type { PopupReply, PopupRequest } from './messages.js';
 
 // Must match HOST_NAME in ../install.ts exactly: Chrome matches the string
@@ -288,15 +289,26 @@ async function markTab(tabId: number): Promise<void> {
  */
 chrome.runtime.onMessage.addListener((message: PopupRequest, _sender, respond) => {
   if (message?.kind === 'status') {
-    const reply: PopupReply = {
-      kind: 'status',
-      connected: port !== undefined,
-      version: chrome.runtime.getManifest().version,
-      host: HOST,
-      attached: attachedTabIds(),
-    };
-    respond(reply);
-    return false;
+    void identity().then((who) => {
+      const reply: PopupReply = {
+        kind: 'status',
+        connected: port !== undefined,
+        version: chrome.runtime.getManifest().version,
+        host: HOST,
+        attached: attachedTabIds(),
+        id: who.id,
+        label: who.label,
+      };
+      respond(reply);
+    });
+    return true;
+  }
+  if (message?.kind === 'setLabel') {
+    void setLabel(message.label).then((who) => {
+      const reply: PopupReply = { kind: 'labelled', id: who.id, label: who.label };
+      respond(reply);
+    });
+    return true;
   }
   if (message?.kind === 'releaseAll') {
     const held = attachedTabIds();
@@ -323,6 +335,13 @@ async function handle(message: Request): Promise<unknown> {
         // used to say how many were in that state.
         attached: attachedTabIds(),
       };
+    case 'identify': {
+      // Asked by the host before it picks an endpoint, so this is the first
+      // thing a fresh profile answers and it must not depend on anything else.
+      const who = await identity();
+      const [windows, tabs] = await Promise.all([chrome.windows.getAll(), chrome.tabs.query({})]);
+      return { ...who, windows: windows.length, tabs: tabs.length };
+    }
     case 'listTabs':
       return { tabs: (await chrome.tabs.query({})).map(describeTab) };
     case 'listGroups':
@@ -542,9 +561,9 @@ chrome.runtime.onInstalled.addListener(() => { connectWhenDrivable(); });
 /**
  * Connects only from a profile that has a window, and waits for one otherwise.
  *
- * The endpoint is per user rather than per profile, so whichever profile claims
- * it decides which browser a caller drives. Preferring one the user can actually
- * see is the difference between driving their browser and driving a ghost.
+ * Each profile has its own endpoint, so this is no longer about who wins one.
+ * It is about not offering a browser nobody can see: a windowless profile would
+ * appear in list_browsers with nothing in it and nowhere to draw the tab group.
  */
 function connectWhenDrivable(): void {
   void hasWindows().then((yes) => {

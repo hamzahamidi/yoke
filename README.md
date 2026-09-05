@@ -7,9 +7,9 @@
 [![dependencies](https://img.shields.io/badge/runtime%20deps-0-0e8fa3)](package.json)
 [![license](https://img.shields.io/npm/l/yoke-mcp)](LICENSE)
 
-Yoke drives the Chrome you are already using: an extension plus a native messaging host, so there is no browser to launch, no second profile, and no browser-wide debugging port. Chrome spawns the host itself when the extension connects, and the per-user endpoint in between (a Unix socket at mode 0600 inside a directory whose 0700 mode is verified, or a named pipe on Windows) exists only while that connection is live. It does use the Chrome DevTools Protocol, one tab at a time, through the extension's own `debugger` permission, which is why a tab with DevTools open cannot be driven.
+Yoke drives the Chrome you are already using: an extension plus a native messaging host, so there is no browser to launch, no second profile, and no browser-wide debugging port. Chrome spawns the host itself when the extension connects, and the endpoint in between (a Unix socket at mode 0600 inside a directory whose 0700 mode is verified, or a named pipe on Windows) exists only while that connection is live. There is one per Chrome profile, so two profiles with the extension loaded are both reachable and told apart. It does use the Chrome DevTools Protocol, one tab at a time, through the extension's own `debugger` permission, which is why a tab with DevTools open cannot be driven.
 
-`list_tabs` returns every tab in every window of the Chrome profile that owns the endpoint, and every operation on an existing tab names a `tab_id`, because there is no acting on the active tab when none was named. Any tab yoke drives or reads joins a visible tab group called `yoke`, and `read_page` and `find` describe a password field without returning its value. URL fields in tool output are cut to origin and path by default, with `full_urls: true` on `list_tabs` as the way to opt out, and the package has zero runtime dependencies on Node 22 or later.
+`list_tabs` returns every tab in every window of every connected Chrome profile, and every operation on an existing tab names a `tab_id`, because there is no acting on the active tab when none was named. Any tab yoke drives or reads joins a visible tab group called `yoke`, and `read_page` and `find` describe a password field without returning its value. URL fields in tool output are cut to origin and path by default, with `full_urls: true` on `list_tabs` as the way to opt out, and the package has zero runtime dependencies on Node 22 or later.
 
 Chrome requires a three part bridge:
 
@@ -29,11 +29,11 @@ Every operation on an existing tab requires a `tab_id`, with no active tab fallb
 
 ### Your own Chrome profile
 
-Yoke runs through an extension in the Chrome profile you are already using. It can reach every tab in every window of that profile, with its existing cookies, logged in sessions, and other extensions.
+Yoke runs through an extension in the Chrome profile you are already using. It can reach every tab in every window of that profile, with its existing cookies, logged in sessions, and other extensions. Load it in a second profile and both are reachable at once: `list_browsers` names each, `list_tabs` covers both, and a tab id is enough to route a call to the profile that owns it, because Chrome numbers tabs once for the whole browser.
 
 ### No browser-wide debugging endpoint
 
-Yoke uses `chrome.debugger`, which is Chrome's extension API for the Chrome DevTools Protocol. It attaches to one tab at a time and does not require a Chrome launch flag or a browser-wide remote debugging port. The local bridge is a per-user Unix socket or Windows named pipe that exists only while Chrome has the extension connected.
+Yoke uses `chrome.debugger`, which is Chrome's extension API for the Chrome DevTools Protocol. It attaches to one tab at a time and does not require a Chrome launch flag or a browser-wide remote debugging port. The local bridge is a per-profile Unix socket or Windows named pipe that exists only while Chrome has the extension connected.
 
 ### Built for a human and an agent in the same browser
 
@@ -79,7 +79,7 @@ The cells describe the verified versions and their defaults. Flags that change a
 
 1. `@playwright/mcp` defaults to `browserName: chromium` with `channel: 'chrome'`, so it drives system-installed Google Chrome, but in `~/Library/Caches/ms-playwright-mcp/mcp-{channel}-{sha256(cwd)[0:7]}`. That profile persists between runs and accumulates its own logins, so it is not your profile and not a throwaway either. Its own `--help` text and README call it a temporary directory, which is wrong. Different project directories silently get different profiles.
 2. `--autoConnect` needs Chrome 144 or later plus a manual toggle at `chrome://inspect/#remote-debugging`, and it attaches to one profile (the default, as Chrome determines it), not to every window on the machine. The documented `--browser-url` path steers users away from their real profile: the README tells them to pass `--user-data-dir` so their browsing data is not exposed.
-3. Scoped to one Chrome profile, because the endpoint path is per user and not per profile. On published 0.1.2 a second profile with the extension loaded could take the endpoint silently. Published 0.1.3 fixes that failure mode.
+3. Scoped to one Chrome profile, because the endpoint path is per user and not per profile. On published 0.1.2 a second profile with the extension loaded could take the endpoint silently. Published 0.1.3 fixes that failure mode. The next release gives each profile its own endpoint, described under Several Chrome profiles below.
 4. `--extension` genuinely attaches to every tab the extension already knows about (`chrome.debugger.attach` per tab), so the honest answer is not by default, and supported with `--extension`.
 5. Only from extension v1.3.3 (2025-04-14) could BrowserMCP automate tabs that existed before the extension was installed. The selected tab id is persisted in extension storage and survives a server restart.
 6. `open_tab` creates the tab, so there is no id to name, and it lands in Chrome's current window. `scroll` without a `ref` uses a fixed viewport point, still inside the named tab.
@@ -153,7 +153,7 @@ When setup is complete, the last line is:
 Working. Every link in the chain answered.
 ```
 
-If something is wrong, `doctor` stops after the first broken link, names it, and prints a suggested fix. It checks the compiled host, browser registration, local socket, extension reply, and whether tabs are visible.
+If something is wrong, `doctor` stops after the first broken link, names it, and prints a suggested fix. It checks the compiled host, browser registration, the local sockets, which profiles answered, and for each profile whether the extension replies and tabs are visible.
 
 For a shorter connection check, run:
 
@@ -188,11 +188,11 @@ Clients use different names and locations for their MCP configuration. If you do
 
 ## What it can do
 
-yoke exposes 19 MCP tools. They are grouped here by the job they help with.
+yoke exposes 20 MCP tools. They are grouped here by the job they help with.
 
 | Job | Tools | What they do |
 | --- | --- | --- |
-| Work with tabs | `list_tabs`, `list_tab_groups`, `open_tab`, `navigate`, `close_tab`, `group_tabs`, `ungroup_tabs` | See every window, open background tabs, visit HTTP or HTTPS URLs, close tabs, and manage Chrome tab groups. |
+| Work with tabs | `list_browsers`, `list_tabs`, `list_tab_groups`, `open_tab`, `navigate`, `close_tab`, `group_tabs`, `ungroup_tabs` | See which profiles are connected and every window in each, open background tabs, visit HTTP or HTTPS URLs, close tabs, and manage Chrome tab groups. |
 | Read a page | `get_page_text`, `read_page`, `find`, `screenshot` | Read visible text, describe interactive elements, find a matching element, or capture a foreground or background tab. |
 | Act on a page | `click`, `type_text`, `press_key`, `scroll`, `run_javascript` | Use trusted input by element reference, scroll the page, or evaluate JavaScript in the page's own world. |
 | Debug a page | `read_console`, `read_network`, `release_tab` | Read recorded console and network activity, then detach yoke and clear that tab's buffers. |
@@ -202,6 +202,16 @@ Any tool that acts on an existing tab requires an explicit `tab_id` obtained fro
 `read_page` returns references such as `e1` for interactive elements. `click`, `type_text`, `press_key`, and reference based scrolling use those references. A reference expires when the page navigates or renders the element again, so call `read_page` again when a reference is stale.
 
 `navigate` and `open_tab` accept HTTP and HTTPS URLs. New tabs open in the background unless the caller asks to focus one.
+
+### Several Chrome profiles
+
+Chrome starts one native host per profile, and each host listens on its own endpoint named after an id the extension mints the first time it runs in that profile. `list_browsers` lists every profile that answers, with its id, the label you gave it in the popup, its tab and window counts, and the sites it mostly has open, so a profile is recognisable before it has a name.
+
+With one profile connected nothing changes. With more, `list_tabs` and `list_tab_groups` include every profile and add a `browser` column, and every tool that names a `tab_id` reaches the profile holding that tab without being told which: Chrome allocates tab ids from one counter for the whole browser, so two profiles never share one. `open_tab` names no existing tab, so with more than one profile connected it needs `browser`, an id or label from `list_browsers`, and refuses rather than picking.
+
+Two different browsers, such as Chrome and Brave, do number tabs independently. A tab id both report is marked in `list_tabs` and refused by the tab tools, naming both browsers.
+
+The id and label are stored in the extension's own storage in that profile. They never leave your machine.
 
 ### Tab groups
 
@@ -242,7 +252,7 @@ The same permission lets `screenshot` capture a background tab. `chrome.tabs.cap
 
 ## Local connection and process lifetime
 
-The bridge does not open a TCP port. On macOS and Linux, the native host listens on a Unix socket inside a directory readable only by your user account. The socket itself is also restricted to that account. Windows uses a named pipe.
+The bridge does not open a TCP port. On macOS and Linux, each native host listens on a Unix socket inside a directory readable only by your user account, one socket per Chrome profile. The socket itself is also restricted to that account. Windows uses a named pipe.
 
 Chrome owns the native host process. It starts the host when the extension calls `connectNative` and stops it when that connection closes. This is why the Unix socket between the MCP server and host is required.
 
@@ -256,7 +266,7 @@ After `npm link`, the command surface is:
 | --- | --- |
 | `yoke install` | Register the native messaging host with each detected Chrome family browser. |
 | `yoke doctor` | Check each link from the build through tab visibility and suggest the first fix. |
-| `yoke status` | Report whether the extension answers and print the local socket path. |
+| `yoke status` | Report which Chrome profiles answer, one line each with id, label, tab count and socket path. |
 | `yoke uninstall` | Remove the native host registration. |
 | `yoke mcp` | Run the MCP server over standard input and standard output. This is what an MCP client starts. |
 
@@ -270,7 +280,8 @@ From a checkout that has not been linked, replace `yoke` with `node dist/cli.js`
 4. A driven tab shows Chrome's debugging bar and cannot share its debugger slot with DevTools.
 5. Element references expire after navigation or a page render. Console and network history starts when yoke first attaches to that tab, not before.
 6. Screenshots capture the page viewport, not browser chrome such as the address bar or tab strip.
-7. Chrome's internal pages cannot be read or driven. Neither can the Chrome Web Store or the extensions gallery: Chrome refuses both `chrome.scripting` and `chrome.debugger` there, so no extension can automate them, including this one. Publishing an extension is therefore a manual job by design.
+7. Two different browsers that both run the extension, such as Chrome and Brave, number their tabs independently. A tab id both report is refused rather than routed, because it cannot be sent to both. Two profiles of the same Chrome never collide.
+8. Chrome's internal pages cannot be read or driven. Neither can the Chrome Web Store or the extensions gallery: Chrome refuses both `chrome.scripting` and `chrome.debugger` there, so no extension can automate them, including this one. Publishing an extension is therefore a manual job by design.
 
 ## Uninstall
 

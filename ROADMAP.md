@@ -39,6 +39,7 @@ Theme: prove the thesis. Built, working end to end, not yet tagged or published.
 - The extension id is pinned by a key in its manifest, because native messaging allowlists by id and an unpacked load would otherwise get a fresh one each time. The private key never enters the repository, and CI asserts the key still derives the allowlisted id.
 - An icon, at 16, 32, 48 and 128, drawn on an 8 unit grid so every line lands on a pixel boundary at 16.
 - Offline tests for the MCP surface and the redaction, driven without a browser. CI green on Node 22 and 24 across Linux, macOS and Windows.
+- Since 0.1.3, unreleased: one endpoint per Chrome profile, named after an id the extension mints and keeps. `list_browsers` names each connected profile, `list_tabs` covers all of them, tab tools route by tab id, and `open_tab` takes `browser` when there is a choice. Closes the wrong-profile case in #6 and #8, where a single per-user endpoint was won by whichever profile connected first.
 
 The acceptance test is one number, and it holds: `list_tabs` returns every tab in the browser rather than the handful inside a managed group. On the machine this was built against that is 41 tabs, all of them addressable.
 

@@ -5,8 +5,9 @@
 // install has nothing to show and no way to explain itself, which reads as
 // "requests six sensitive permissions, does nothing".
 //
-// So this answers three questions in the order someone asks them: is the local
-// half installed, which tabs are currently being driven, and how do I stop it.
+// So this answers four questions in the order someone asks them: is the local
+// half installed, which profile is this, which tabs are currently being driven,
+// and how do I stop it.
 import type { PopupReply, PopupRequest } from './messages.js';
 
 const ask = (request: PopupRequest): Promise<PopupReply> =>
@@ -48,7 +49,26 @@ async function render(): Promise<void> {
   }
 
   el('idle').hidden = held > 0;
+
+  // The id is how the server tells this profile from another one, and the label
+  // is how a person does. Shown so what list_browsers prints can be matched to
+  // the window it came from.
+  el('profile-id').textContent = status.id;
+  const input = el('label') as HTMLInputElement;
+  if (document.activeElement !== input && input.value !== status.label) { input.value = status.label; }
 }
+
+el('label-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const input = el('label') as HTMLInputElement;
+  const button = el('save') as HTMLButtonElement;
+  button.disabled = true;
+  void ask({ kind: 'setLabel', label: input.value }).then((reply) => {
+    button.disabled = false;
+    if (reply.kind === 'labelled') { input.value = reply.label; }
+    return render();
+  });
+});
 
 el('release').addEventListener('click', () => {
   const button = el('release') as HTMLButtonElement;

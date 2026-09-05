@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { install, uninstall } from './install.js';
-import { endpointPath } from './socket-path.js';
+import { endpointDir } from './socket-path.js';
 
 const USAGE = `yoke - browser automation in the Chrome you are already signed in to.
 
@@ -89,15 +89,26 @@ async function main(): Promise<number> {
   }
 
   if (action === 'status') {
-    const { available } = await import('./socket-client.js');
-    const reachable = await available();
-    process.stdout.write(`extension: ${reachable ? 'connected' : 'not reachable'}\n`);
-    process.stdout.write(`socket: ${endpointPath()}\n`);
-    if (!reachable) {
+    const { connectedBrowsers } = await import('./browsers.js');
+    const browsers = await connectedBrowsers();
+    if (browsers.length === 0) {
+      process.stdout.write('extension: not reachable\n');
+      process.stdout.write(`endpoints: ${endpointDir()}\n`);
       process.stdout.write('\nIf install has run and the extension is loaded, open chrome://extensions and '
         + 'check its service worker is running. Chrome starts the host on demand.\n');
+      return EXIT.UNAVAILABLE;
     }
-    return reachable ? EXIT.OK : EXIT.UNAVAILABLE;
+    // One line per profile, because with two connected "connected" alone is
+    // exactly the answer that hid the wrong-profile case.
+    process.stdout.write(`extension: connected, ${browsers.length} browser(s)\n`);
+    for (const browser of browsers) {
+      const label = browser.unidentified
+        ? '(legacy endpoint; reload the extension so this profile gets its own)'
+        : browser.label === '' ? '(unnamed)' : browser.label;
+      const tabs = browser.unidentified ? 'tabs unknown' : `${browser.tabs} tab(s)`;
+      process.stdout.write(`  ${browser.id}\t${label}\t${tabs}\t${browser.endpoint}\n`);
+    }
+    return EXIT.OK;
   }
 
   process.stdout.write(USAGE);

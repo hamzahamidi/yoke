@@ -1,6 +1,6 @@
 # Privacy policy for Yoke
 
-Last updated: 23 August 2026
+Last updated: 5 September 2026
 
 Yoke handles a lot of what is on your screen, and sends none of it to us.
 
@@ -32,8 +32,8 @@ To one place: the local program you connected. The path is
 
     extension  ->  native messaging host  ->  Unix socket  ->  MCP server  ->  your client
 
-Every hop is on your computer. The socket lives in a directory readable only by
-your user account. Nothing is written to a remote service by Yoke, and the
+Every hop is on your computer. The sockets, one per Chrome profile, live in a
+directory readable only by your user account. Nothing is written to a remote service by Yoke, and the
 extension makes no network requests of its own.
 
 What your client then does with what it receives is outside Yoke's control and
@@ -49,6 +49,11 @@ Almost nothing, and nothing that outlives the browser:
 - Console messages and network requests for tabs being driven, kept in memory
   only, capped at 500 entries per tab, and discarded when the tab closes, when
   the debugger detaches, or when Chrome restarts the extension.
+- A random eight character id for the Chrome profile the extension runs in, and
+  the label you type for it in the popup, kept in the extension's own storage in
+  that profile. The id names the local socket for that profile and appears in
+  tool output so a client can tell two profiles apart. It is not derived from
+  anything about you and is not sent anywhere.
 - No cookies, credentials, passwords, form values or browsing history are
   recorded or persisted anywhere by Yoke.
 
