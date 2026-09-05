@@ -23,4 +23,5 @@ export type PopupReply =
     label: string;
   }
   | { kind: 'released'; count: number }
-  | { kind: 'labelled'; id: string; label: string };
+  | { kind: 'labelled'; id: string; label: string }
+  | { kind: 'failed'; reason: string };

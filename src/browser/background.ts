@@ -304,10 +304,17 @@ chrome.runtime.onMessage.addListener((message: PopupRequest, _sender, respond) =
     return true;
   }
   if (message?.kind === 'setLabel') {
-    void setLabel(message.label).then((who) => {
-      const reply: PopupReply = { kind: 'labelled', id: who.id, label: who.label };
-      respond(reply);
-    });
+    void setLabel(message.label)
+      .then((who) => {
+        const reply: PopupReply = { kind: 'labelled', id: who.id, label: who.label };
+        respond(reply);
+      })
+      .catch((thrown: unknown) => {
+        // Answered rather than dropped: a closed channel reads in the popup as
+        // a save that silently did nothing.
+        const reply: PopupReply = { kind: 'failed', reason: thrown instanceof Error ? thrown.message : String(thrown) };
+        respond(reply);
+      });
     return true;
   }
   if (message?.kind === 'releaseAll') {

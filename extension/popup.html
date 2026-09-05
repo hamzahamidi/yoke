@@ -93,8 +93,9 @@ yoke install</code>
       <input id="label" type="text" maxlength="40" placeholder="Name it, e.g. work" autocomplete="off">
       <button id="save" type="submit">Save</button>
     </label>
-    <p>Tools that list several profiles show this name. Its id is <code class="inline" id="profile-id"></code>.</p>
+    <p id="label-note">Tools that list several profiles show this name. Its id is <code class="inline" id="profile-id"></code>.</p>
   </form>
+  <p id="stale" class="warn" hidden>This popup is newer than the extension's running code, so it cannot save a name yet. Reload Yoke at chrome://extensions and open this again.</p>
 </section>
 
 <section>
