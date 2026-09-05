@@ -25,6 +25,8 @@ interface FakeHost {
   received: string[];
   /** Answer identify with an unknown-op error, as an extension from before it would. */
   legacy?: boolean;
+  /** The id the next openTab hands out. Defaults to 900. */
+  nextTabId?: number;
 }
 
 function serve(dir: string, host: FakeHost): Promise<Server> {
@@ -63,12 +65,13 @@ function answer(host: FakeHost, request: { op: string; args?: Record<string, unk
       const tabId = request.args?.['tabId'] as number;
       return ok({ tabId, url: 'https://x/', title: `page in ${host.id}`, text: 'hello', truncated: false });
     }
-    case 'openTab':
-      return ok({
-        tab: { id: 900, windowId: 1, groupId: 1, url: String(request.args?.['url'] ?? ''), title: 'new' },
-        groupId: 1,
-        groupTitle: 'yoke',
-      });
+    case 'openTab': {
+      const id = host.nextTabId ?? 900;
+      const tab = { id, windowId: 1, url: String(request.args?.['url'] ?? ''), title: 'new' };
+      // The listing must show it afterwards, as a real browser's would.
+      host.tabs.push(tab);
+      return ok({ tab: { ...tab, groupId: 1 }, groupId: 1, groupTitle: 'yoke' });
+    }
     default:
       return { ok: false, error: `fake host has no ${request.op}`, protocol: 1 };
   }
@@ -118,7 +121,8 @@ const personal: FakeHost = {
   received: [],
 };
 
-const fresh = (host: FakeHost): FakeHost => ({ ...host, received: [] });
+// Deep enough that a host which grows its tab list does not leak into the next test.
+const fresh = (host: FakeHost): FakeHost => ({ ...host, tabs: host.tabs.map((tab) => ({ ...tab })), received: [] });
 
 test('one browser reads exactly as it did before profiles existed', { skip }, async () => {
   await withHosts([fresh(work)], async () => {
@@ -252,6 +256,24 @@ test('a browser that connects after a tab was placed is noticed, and a new colli
     } finally {
       late.close();
     }
+  });
+});
+
+test('a tab open_tab creates in one browser with an id cached for another is refused, not misrouted', { skip }, async () => {
+  const a = fresh(work);
+  // Brave has its own id counter, and its next id happens to be one Chrome already has.
+  const brave: FakeHost = { id: 'ffffffff', label: 'brave', tabs: [], received: [], nextTabId: 11 };
+  await withHosts([a, brave], async () => {
+    const first = await call('get_page_text', { tab_id: 11 });
+    assert.equal(first.isError, undefined, 'placed 11 in work');
+    const opened = await call('open_tab', { url: 'https://example.com', browser: 'brave' });
+    assert.match(opened.content[0]?.text ?? '', /Opened tab 11/);
+    // Endpoints on disk are unchanged, so only forgetting the id can save this.
+    const second = await call('get_page_text', { tab_id: 11 });
+    assert.equal(second.isError, true, 'the stale placement must not win');
+    assert.match(second.content[0]?.text ?? '', /a1b2c3d4/);
+    assert.match(second.content[0]?.text ?? '', /brave/);
+    assert.equal(a.received.filter((op) => op === 'getPageText').length, 1, 'work was not asked again');
   });
 });
 

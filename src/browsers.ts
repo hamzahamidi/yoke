@@ -174,6 +174,18 @@ export async function chooseBrowser(selector: unknown, tool: string): Promise<Br
 }
 
 /**
+ * Forgets where a tab id was placed.
+ *
+ * For a tab that appeared without a listing, which only open_tab does. Two
+ * browsers number tabs independently, so the id it hands out can be one another
+ * browser already holds, and a cached placement for it would send the next
+ * call there. Forgetting forces a listing, which is where collisions are seen.
+ */
+export function unplace(tabId: number): void {
+  placement.delete(tabId);
+}
+
+/**
  * The endpoint holding a tab.
  *
  * The routing table is filled by listing, so a tab the caller learnt about from

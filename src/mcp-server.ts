@@ -13,7 +13,7 @@
 import { createInterface } from 'node:readline';
 
 import {
-  allTabs, askTab, chooseBrowser, displayName, endpointForTabs,
+  allTabs, askTab, chooseBrowser, displayName, endpointForTabs, unplace,
   NoSuchBrowser, NoSuchTab, type Browser,
 } from './browsers.js';
 import { ask, ExtensionUnavailable } from './socket-client.js';
@@ -503,6 +503,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       active: args['active'] === true,
       groupTitle,
     });
+    // The id is new to the router, and may not be new to another browser.
+    unplace(opened.tab.id);
     // Three outcomes, not two. A reply with no groupId at all comes from an
     // extension build older than this server, and saying so beats printing the
     // word "undefined" at whoever is reading.
