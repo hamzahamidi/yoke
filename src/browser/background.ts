@@ -514,6 +514,13 @@ async function hasWindows(): Promise<boolean> {
 /** Grows on each failed attempt, resets once a connection holds. */
 let retryDelayMs = 1_000;
 const MAX_RETRY_MS = 60_000;
+/**
+ * When the scheduled retry is due, so browsing does not attempt on top of it.
+ *
+ * Zero in a worker Chrome has just started, which is the case that matters: a
+ * worker with no memory of a backoff is one that lost the last one.
+ */
+let nextAttemptAt = 0;
 
 function connect(): void {
   if (port) { return; }
@@ -554,6 +561,7 @@ function connect(): void {
     // get the host filled the extension's error list once per retry.
     const reason = chrome.runtime.lastError?.message ?? 'the host disconnected';
     retryDelayMs = Math.min(retryDelayMs * 2, MAX_RETRY_MS);
+    nextAttemptAt = Date.now() + retryDelayMs;
     console.log(`yoke: ${reason}. Retrying in ${retryDelayMs / 1_000}s`);
     // Backoff rather than a fixed second. The common reason for a host that
     // exits immediately is another Chrome profile already owning the endpoint,
@@ -580,5 +588,29 @@ function connectWhenDrivable(): void {
 }
 
 chrome.windows.onCreated.addListener(() => { connectWhenDrivable(); });
+
+/**
+ * Browsing is what brings a worker back that Chrome stopped while disconnected.
+ *
+ * The retry in `onDisconnect` lives in a `setTimeout`, so it dies with the worker
+ * that scheduled it. After that, only an event this file listens to can start the
+ * worker again, and until now that meant a Chrome restart, a new window, a closed
+ * tab or the popup: nothing a person hits while reading pages in the window they
+ * already had. Being woken is most of the job, because loading the worker runs
+ * `connectWhenDrivable` on its own.
+ *
+ * Navigation is deliberately not in the list. `tabs.onUpdated` also fires for
+ * titles and favicons in tabs nobody is looking at, which would wake the worker
+ * far more often than it could ever help.
+ */
+function connectAsSoonAsTheBackoffAllows(): void {
+  // A worker mid-backoff has a retry coming and does not need a second one. A
+  // worker that has just started has no memory of one, so it goes ahead.
+  if (Date.now() < nextAttemptAt) { return; }
+  connectWhenDrivable();
+}
+
+chrome.tabs.onActivated.addListener(() => { connectAsSoonAsTheBackoffAllows(); });
+chrome.tabs.onCreated.addListener(() => { connectAsSoonAsTheBackoffAllows(); });
 
 connectWhenDrivable();
