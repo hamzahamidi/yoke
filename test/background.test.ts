@@ -45,6 +45,7 @@ interface Fake {
  * worker imports, so those have to answer even though no test drives them.
  */
 function install(refuseFirstConnect = false): Fake {
+  scheduled.length = 0;
   const ports: FakePort[] = [];
   let refusals = refuseFirstConnect ? 1 : 0;
   const tabs = {
@@ -81,6 +82,32 @@ function install(refuseFirstConnect = false): Fake {
   };
   return { ports, tabs };
 }
+
+interface Scheduled {
+  delay: number;
+  run(): void;
+}
+
+/**
+ * The worker's own retries, held rather than run.
+ *
+ * A retry that fired by itself would land in whichever test happened to be
+ * running by then, against that test's fake, so anything the worker schedules
+ * for a second or more is recorded and each test runs what it wants. Shorter
+ * timers are the tests' own and pass through.
+ */
+const scheduled: Scheduled[] = [];
+const realSetTimeout = globalThis.setTimeout;
+(globalThis as unknown as { setTimeout: unknown }).setTimeout = (handler: () => void, delay?: number) => {
+  if ((delay ?? 0) >= 1_000) {
+    scheduled.push({ delay: delay ?? 0, run: handler });
+    return 0;
+  }
+  return realSetTimeout(handler, delay);
+};
+
+/** The timer the worker asked for last, which is the one a test has just caused. */
+const latest = (): Scheduled | undefined => scheduled[scheduled.length - 1];
 
 let copy = 0;
 
@@ -141,4 +168,54 @@ test('browsing does not shorten the backoff of a worker that is already retrying
   await settle();
 
   assert.equal(fake.ports.length, 1, 'the retry already scheduled owns the next attempt');
+});
+
+/** One failed round: the port drops, and the retry it scheduled runs. */
+async function failOnce(fake: Fake): Promise<number> {
+  fake.ports[fake.ports.length - 1]?.onDisconnect.fire();
+  const retry = latest();
+  retry?.run();
+  await settle();
+  return retry?.delay ?? 0;
+}
+
+test('the delay doubles while the host keeps failing', async () => {
+  const fake = await load();
+
+  const delays = [await failOnce(fake), await failOnce(fake), await failOnce(fake)];
+
+  assert.deepEqual(delays, [2_000, 4_000, 8_000], 'each failure should wait longer than the last');
+});
+
+test('a host that speaks and stays puts the delay back to a second', async () => {
+  const fake = await load();
+  await failOnce(fake);
+  await failOnce(fake);
+
+  const held = fake.ports[fake.ports.length - 1];
+  held?.onMessage.fire({});
+  // The window the port has to outlast before the connection counts as held.
+  latest()?.run();
+  held?.onDisconnect.fire();
+
+  assert.equal(latest()?.delay, 2_000, 'a connection that held should clear the backoff');
+});
+
+test('a host that speaks and then exits keeps backing off', async () => {
+  const fake = await load();
+
+  const spoke = fake.ports[0];
+  spoke?.onMessage.fire({});
+  const holding = latest();
+  spoke?.onDisconnect.fire();
+  const first = latest()?.delay;
+  // Late, and the port it was watching is gone, so there is nothing to clear.
+  holding?.run();
+
+  latest()?.run();
+  await settle();
+  fake.ports[fake.ports.length - 1]?.onDisconnect.fire();
+
+  assert.equal(first, 2_000);
+  assert.equal(latest()?.delay, 4_000, 'a port that did not last must not clear the backoff');
 });

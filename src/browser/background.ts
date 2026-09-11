@@ -515,6 +515,15 @@ async function hasWindows(): Promise<boolean> {
 let retryDelayMs = 1_000;
 const MAX_RETRY_MS = 60_000;
 /**
+ * How long after its first message a port must still be there to count as held.
+ *
+ * The host's first message is `identify`, which it sends as it starts, and a
+ * host that declines the endpoint exits as soon as it has read the answer to
+ * `listTabs`. A few seconds tells those two apart and blocks nothing: the delay
+ * being cleared is all that waits on it.
+ */
+const HELD_FOR_MS = 3_000;
+/**
  * When the scheduled retry is due, so browsing does not attempt on top of it.
  *
  * Zero in a worker Chrome has just started, which is the case that matters: a
@@ -530,11 +539,22 @@ function connect(): void {
     console.log('yoke: native host unavailable', failure);
     return;
   }
-  // Reset here rather than on the first message, because a port that opens is
-  // the thing being retried. A host that then exits raises the delay again.
-  retryDelayMs = 1_000;
+  const opened = port;
+  let timing = false;
 
   port.onMessage.addListener((message: Request) => {
+    // A port arriving says nothing about the host. Chrome hands one back before
+    // it knows whether the host can start and reports one that cannot through a
+    // disconnect, so resetting here on the port alone left the delay at two
+    // seconds forever: every attempt reset it and every failure doubled it once.
+    // A host that has spoken and is still there a moment later is the cheapest
+    // evidence that this attempt is different from the last one.
+    if (!timing) {
+      timing = true;
+      setTimeout(() => {
+        if (port === opened) { retryDelayMs = 1_000; }
+      }, HELD_FOR_MS);
+    }
     if (message?.id === undefined) { return; }
     void handle(message)
       .then((data) => {
