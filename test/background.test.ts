@@ -58,8 +58,10 @@ function install(refuseFirstConnect = false): Fake {
       connectNative: (): FakePort => {
         if (refusals > 0) {
           refusals -= 1;
-          // What Chrome throws when it has no manifest for the host.
-          throw new Error('Specified native messaging host not found.');
+          // Stands in for an opening attempt that left the worker without a port.
+          // Chrome reports a missing host through `onDisconnect` rather than by
+          // throwing, but the state the worker is then in is this one.
+          throw new Error('no port');
         }
         const port: FakePort = {
           onMessage: slot<[unknown]>(),
