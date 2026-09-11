@@ -21,6 +21,19 @@ export class ExtensionUnavailable extends Error {
   override readonly name = 'ExtensionUnavailable';
 }
 
+/**
+ * What every unreachable answer says, in one place so they cannot drift.
+ *
+ * The icon comes first because the common reason is the least obvious one.
+ * Chrome stops an idle extension worker, and a stopped worker leaves exactly
+ * this state with the install intact: telling that user to run `yoke install`
+ * sends them to reinstall something that is not broken. Opening the popup
+ * starts the worker, which connects on its own.
+ */
+export const NOT_CONNECTED =
+  'the extension is not connected. Click the Yoke toolbar icon in Chrome to wake it, '
+  + 'or run `yoke install` if it was never loaded there. `yoke doctor` says which link is missing.';
+
 const isSocketReply = (value: unknown): value is SocketReply =>
   typeof value === 'object' && value !== null && 'ok' in value;
 
@@ -39,8 +52,7 @@ export function ask<K extends OperationName>(
 ): Promise<ResultOf<K>> {
   return new Promise<ResultOf<K>>((resolve, reject) => {
     if (process.platform !== 'win32' && !existsSync(endpoint)) {
-      reject(new ExtensionUnavailable(
-        'the extension is not connected. Run `yoke install`, then load it in Chrome.'));
+      reject(new ExtensionUnavailable(NOT_CONNECTED));
       return;
     }
 

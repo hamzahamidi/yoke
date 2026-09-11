@@ -13,7 +13,7 @@
 // so a collision is possible there. It is detected and refused rather than
 // guessed at.
 import { LEGACY_ID, endpointIdOf, listEndpoints } from './socket-path.js';
-import { ask, ExtensionUnavailable } from './socket-client.js';
+import { ask, ExtensionUnavailable, NOT_CONNECTED } from './socket-client.js';
 import type { ArgsOf, OperationName, ResultOf, TabInfo } from './protocol.js';
 
 export interface Browser {
@@ -142,8 +142,7 @@ export async function allTabs(): Promise<{ browsers: Browser[]; tabs: PlacedTab[
 export async function chooseBrowser(selector: unknown, tool: string): Promise<Browser> {
   const browsers = await connectedBrowsers();
   if (browsers.length === 0) {
-    throw new ExtensionUnavailable(
-      'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+    throw new ExtensionUnavailable(NOT_CONNECTED);
   }
   if (selector === undefined || selector === '') {
     const only = browsers[0];
@@ -211,8 +210,7 @@ export async function endpointForTab(tabId: number): Promise<string> {
   }
   if (endpoint !== undefined) { return endpoint; }
   if ((await connectedBrowsers()).length === 0) {
-    throw new ExtensionUnavailable(
-      'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+    throw new ExtensionUnavailable(NOT_CONNECTED);
   }
   throw new NoSuchTab(`tab ${tabId} is not open in any connected browser. Call list_tabs for ids that are.`);
 }
