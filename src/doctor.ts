@@ -131,7 +131,8 @@ function checkSockets(): Check {
       ok: false,
       label: 'host running',
       detail: `no socket in ${endpointDir()}`,
-      fix: `load ${join(extensionRoot(), 'extension')} at chrome://extensions with Developer mode on`,
+      fix: 'click the Yoke toolbar icon in Chrome to wake it, or load '
+        + `${join(extensionRoot(), 'extension')} at chrome://extensions with Developer mode on if it is not there yet`,
     };
   }
   return {

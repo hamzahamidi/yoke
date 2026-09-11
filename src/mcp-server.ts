@@ -16,7 +16,7 @@ import {
   allTabs, askTab, chooseBrowser, displayName, endpointForTabs, unplace,
   NoSuchBrowser, NoSuchTab, type Browser,
 } from './browsers.js';
-import { ask, ExtensionUnavailable } from './socket-client.js';
+import { ask, ExtensionUnavailable, NOT_CONNECTED } from './socket-client.js';
 
 export const SERVER_NAME = 'yoke';
 export const SERVER_VERSION = '0.1.4';
@@ -408,8 +408,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
   if (name === 'list_browsers') {
     const { browsers, tabs } = await allTabs();
     if (browsers.length === 0) {
-      throw new ExtensionUnavailable(
-        'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+      throw new ExtensionUnavailable(NOT_CONNECTED);
     }
     const lines = browsers.map((browser) => {
       const own = tabs.filter((tab) => tab.browser === browser);
@@ -428,8 +427,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
   if (name === 'list_tabs') {
     const { browsers, tabs } = await allTabs();
     if (browsers.length === 0) {
-      throw new ExtensionUnavailable(
-        'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+      throw new ExtensionUnavailable(NOT_CONNECTED);
     }
     if (tabs.length === 0) {
       return text('No tabs reported, which should not happen while a browser is open.');
@@ -449,8 +447,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
   if (name === 'list_tab_groups') {
     const { browsers, tabs } = await allTabs();
     if (browsers.length === 0) {
-      throw new ExtensionUnavailable(
-        'the extension is not connected. Run `yoke install`, then load it in Chrome.');
+      throw new ExtensionUnavailable(NOT_CONNECTED);
     }
     const several = browsers.length > 1;
     const listed = await Promise.all(browsers.map(async (browser) => {

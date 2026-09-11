@@ -12,6 +12,7 @@ import { test } from 'node:test';
 
 import { handle } from '../dist/mcp-server.js';
 import { forget } from '../dist/browsers.js';
+import { NOT_CONNECTED } from '../dist/socket-client.js';
 
 // Named pipes cannot be created from a directory, so this suite is unix only.
 // Windows is listed as untested in the README for the same reason.
@@ -335,8 +336,10 @@ test('no browser at all is reported as the extension being unreachable', { skip 
     for (const tool of ['list_tabs', 'list_tab_groups', 'list_browsers']) {
       await assert.rejects(
         () => call(tool),
-        (failure: Error) => /not connected/.test(failure.message),
-        `${tool} must say the extension is not connected`,
+        // The same sentence from every tool, not merely one that reads alike:
+        // the wording is what tells a user which of the two causes they have.
+        (failure: Error) => failure.message === NOT_CONNECTED,
+        `${tool} must answer with the unreachable message`,
       );
     }
   });
