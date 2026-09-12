@@ -189,12 +189,25 @@ export async function main(): Promise<void> {
   // disk when that profile last loaded it. Relying on the extension to
   // self-restrict only works once every profile has been reloaded, which is not
   // something this can assume.
-  const listed = await askExtension('listTabs', {}, 3_000);
-  // Silence is given the benefit of the doubt. An error means the profile could
-  // not answer at all, which includes "No current window", and is not drivable.
-  const drivable = listed === undefined
-    || (listed.ok && Array.isArray((listed.data as { tabs?: unknown[] } | undefined)?.tabs)
-      && ((listed.data as { tabs: unknown[] }).tabs.length > 0));
+  const listed = await askExtension('listTabs', {}, IDENTIFY_MS);
+  // Silence used to be given the benefit of the doubt here, which let a worker
+  // that died between the two questions take an endpoint on the strength of the
+  // first one. Naming itself is not the same as being able to serve, so the rule
+  // is the same as above: only an answer counts.
+  if (listed === undefined) {
+    process.stderr.write(
+      'the extension named this profile and then stopped answering, so this host is claiming no endpoint. '
+      + 'Chrome can stop a service worker between one question and the next, and an endpoint it holds '
+      + 'without being able to serve it is worse than none.\n');
+    cleanup();
+    process.exit(0);
+  }
+
+  // An error means the profile could not answer at all, which includes
+  // "No current window", and is not drivable.
+  const drivable = listed.ok
+    && Array.isArray((listed.data as { tabs?: unknown[] } | undefined)?.tabs)
+    && ((listed.data as { tabs: unknown[] }).tabs.length > 0);
 
   if (!drivable) {
     process.stderr.write(

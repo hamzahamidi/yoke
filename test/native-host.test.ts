@@ -113,6 +113,21 @@ test('a host whose extension never answers claims nothing', { skip }, async () =
   }
 });
 
+test('a host whose extension goes quiet after identify claims nothing', { skip }, async () => {
+  // The window a worker dies in is not always before the handshake. It answers
+  // the first question, Chrome stops it, and the second question goes nowhere.
+  const chrome = play((op) => (op === 'identify' ? { ok: true, data: { id: 'ab12cd34', label: 'work' } } : undefined));
+  try {
+    await settle(chrome);
+
+    assert.deepEqual(sockets(chrome.endpoints), [], 'naming itself is not the same as being able to serve');
+    assert.equal(await chrome.stopped, 0);
+    assert.deepEqual(chrome.asked, ['identify', 'listTabs']);
+  } finally {
+    chrome.stop();
+  }
+});
+
 test('a host whose extension predates identify keeps the shared endpoint', { skip }, async () => {
   const chrome = play((op) => {
     if (op === 'identify') { return { ok: false, error: 'unknown op identify' }; }
