@@ -46,7 +46,7 @@ URL fields are reduced to origin and path by default, and `list_tabs` can opt ou
 ### Small and auditable
 
 The package declares zero runtime dependencies and uses Node builtins only. The
-published 0.1.4 tarball is 47 files, all first-party.
+published 0.1.5 tarball is 47 files, all first-party.
 
 TypeScript throughout with `strict` and `noUncheckedIndexedAccess` on. The wire
 shapes are declared once in `src/protocol.ts` and imported by both halves, so a
@@ -63,7 +63,7 @@ judge rather than yours to discover.
 
 The cells describe the verified versions and their defaults. Flags that change an answer are named in the cell or the numbered notes.
 
-| Capability | Yoke (npm 0.1.4) | @playwright/mcp 0.0.79 (2026-08) | chrome-devtools-mcp 1.7.0 (pub. 2026-08-10) | BrowserMCP: server 0.1.3 (2025-04-11), extension 1.3.4 (2025-05-07), unmaintained |
+| Capability | Yoke (npm 0.1.5) | @playwright/mcp 0.0.79 (2026-08) | chrome-devtools-mcp 1.7.0 (pub. 2026-08-10) | BrowserMCP: server 0.1.3 (2025-04-11), extension 1.3.4 (2025-05-07), unmaintained |
 | --- | --- | --- | --- | --- |
 | Runs in the Chrome profile you are already signed in to | Yes. Chrome spawns the host via `connectNative`; there is no browser-launch code | No by default: its own persistent profile keyed to the client's cwd [1]. Yes with `--extension` | No by default: its own profile at `~/.cache/chrome-devtools-mcp/chrome-profile`. Yes with `--autoConnect` [2] | Yes. A Web Store extension in the running browser |
 | Reaches tabs that were already open | Yes, every tab in every window of every Chrome profile the extension is loaded in [3] | No by default (fresh browser, so those tabs do not exist in it). Yes with `--extension` [4] | No by default. With `--autoConnect`, all windows of one profile [2] | One tab at a time, picked by the human in the popup. No tab listing and no tab creation tool [5] |
@@ -73,7 +73,7 @@ The cells describe the verified versions and their defaults. Flags that change a
 | Runs with your existing cookies and logged-in session | Yes | No by default. Yes with `--extension` [12] | Only with `--autoConnect` [13] | Yes |
 | Marks the tabs it touches | Yes. Any tab it drives or reads joins a visible tab group named "yoke" [14] | No in-tab marker. A separate headed window on its own profile, with automation signals actively suppressed [15] | Nothing added by the server. Chrome's own affordances only, and on `--autoConnect` that is a one-time consent dialog rather than an ongoing marker [16] | Chrome's own debugger infobar, incidental rather than designed, and suppressible [17] |
 | URL redaction on by default | Yes. URL fields are cut to origin plus path; opt out with `full_urls` on `list_tabs` [18] | No. The only mechanism is opt-in substitution of known secret values (`--secrets`) | No, at no setting. Header redaction exists, covers headers only, and is off by default | No. The full page URL is in every snapshot header |
-| Declared runtime dependencies, and install footprint | 0 declared, Node builtins only. The published 0.1.4 tarball is 47 files, all first-party | 2 declared, both pinned to a 1.63.0 alpha. 19 MB installed. No browser download on the default `chrome` channel | 0 declared, and roughly 14 MB of vendored bundle (puppeteer 25.5.0, lighthouse 13.4.0) [19] | 5 declared, 97 transitive as resolved on 2026-08-24, and rising with no new release [20] |
+| Declared runtime dependencies, and install footprint | 0 declared, Node builtins only. The published 0.1.5 tarball is 47 files, all first-party | 2 declared, both pinned to a 1.63.0 alpha. 19 MB installed. No browser download on the default `chrome` channel | 0 declared, and roughly 14 MB of vendored bundle (puppeteer 25.5.0, lighthouse 13.4.0) [19] | 5 declared, 97 transitive as resolved on 2026-08-24, and rising with no new release [20] |
 
 #### Notes, including every place a flag or a version changes the answer
 
