@@ -22,6 +22,24 @@ import {
 import { LEGACY_ID, endpointPathFor, isEndpointId } from './socket-path.js';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+/**
+ * How long the extension has to identify itself before this host gives up on it.
+ *
+ * Short because the answer comes from a worker that is already running: Chrome
+ * spawned this process because that worker asked it to. A window this size is
+ * about telling a live extension from an absent one, not about waiting out a
+ * slow one.
+ */
+const IDENTIFY_MS = 3_000;
+/**
+ * How long an endpoint's current owner has to prove it can still serve it.
+ *
+ * A connection that is accepted proves only that a process is there. The host
+ * that owns a path can have lost its extension and still accept, answer every
+ * op with the relay's timeout error, and hold the endpoint a working profile
+ * should have. So the question is put to it, and only an answer keeps it.
+ */
+const INCUMBENT_MS = 2_000;
 
 /** 0700, and verified after creation rather than assumed. */
 function prepareDirectory(socketPath: string): void {
@@ -138,8 +156,23 @@ export async function main(): Promise<void> {
   // profiles be connected at once. An extension from before the question falls
   // back to the path every earlier release used, so it keeps the behaviour it
   // had rather than landing somewhere new.
-  const identity = await askExtension('identify', {}, 3_000);
-  const claimed = identity?.ok ? (identity.data as { id?: unknown } | undefined)?.id : undefined;
+  const identity = await askExtension('identify', {}, IDENTIFY_MS);
+  // Silence is not an old extension, it is no extension. Chrome can leave this
+  // process holding a pipe whose service worker is already gone, and a host that
+  // then claims an endpoint serves a socket that answers "the extension did not
+  // answer" to everything: a caller sees a browser with no tabs rather than a
+  // browser that is not there, and the profile that should own that endpoint
+  // cannot take it. Exiting makes liveness one thing, decided here, instead of
+  // something every command has to work out for itself.
+  if (identity === undefined) {
+    process.stderr.write(
+      'the extension did not answer, so this host is claiming no endpoint. Chrome starts a host for a '
+      + 'connection its service worker may no longer be there to serve, and a socket nobody answers reads '
+      + 'as a working browser.\n');
+    cleanup();
+    process.exit(0);
+  }
+  const claimed = identity.ok ? (identity.data as { id?: unknown } | undefined)?.id : undefined;
   const id = isEndpointId(claimed) ? claimed : LEGACY_ID;
   if (id === LEGACY_ID) {
     process.stderr.write(
@@ -193,22 +226,41 @@ export async function main(): Promise<void> {
  * the person was looking at, with no error anywhere. Observed as `list_tabs`
  * returning 0 while the visible window held 40 tabs.
  *
- * So a connect is attempted first. Succeeding means a live host owns the path
- * and this one has nothing to offer: it exits, and Chrome surfaces that to the
- * extension rather than the two of them trading the socket back and forth.
- * Failing means the file is a corpse from a host Chrome killed, and unlinking it
- * is right.
+ * So the owner is asked to prove it: a `ping`, which only reaches an answer
+ * through an extension that is still there. An answer means a live host owns the
+ * path and this one has nothing to offer, so it exits and Chrome surfaces that to
+ * the extension rather than the two of them trading the socket back and forth.
+ * Anything else, whether a refused connection, silence, or the relay's own
+ * "the extension did not answer", means the file is a corpse and unlinking it is
+ * right. A connect that merely succeeds proves only that a process is there,
+ * which a host that has outlived its service worker also manages.
  */
 async function claimEndpoint(socketPath: string): Promise<void> {
   if (process.platform === 'win32') { return; }
   if (!existsSync(socketPath)) { return; }
 
   const alive = await new Promise<boolean>((resolve) => {
-    const probe = connect(socketPath)
-      .on('connect', () => { probe.destroy(); resolve(true); })
-      .on('error', () => resolve(false));
+    const probe = connect(socketPath);
+    let text = '';
+    const settle = (value: boolean): void => { probe.destroy(); resolve(value); };
     // A socket that neither connects nor errors is not a working host either.
-    setTimeout(() => { probe.destroy(); resolve(false); }, 500).unref();
+    const timer = setTimeout(() => { settle(false); }, INCUMBENT_MS);
+    timer.unref();
+    probe.on('connect', () => {
+      probe.write(`${JSON.stringify({ op: 'ping', args: {}, timeoutMs: INCUMBENT_MS })}\n`);
+    });
+    probe.on('data', (chunk) => {
+      text += chunk.toString('utf8');
+      const cut = text.indexOf('\n');
+      if (cut === -1) { return; }
+      clearTimeout(timer);
+      try {
+        settle((JSON.parse(text.slice(0, cut)) as { ok?: unknown }).ok === true);
+      } catch {
+        settle(false);
+      }
+    });
+    probe.on('error', () => { clearTimeout(timer); settle(false); });
   });
 
   if (alive) {
