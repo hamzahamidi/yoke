@@ -40,6 +40,16 @@ const IDENTIFY_MS = 3_000;
  * should have. So the question is put to it, and only an answer keeps it.
  */
 const INCUMBENT_MS = 2_000;
+/**
+ * How long the extension gets to answer the ping that decides this host's fate.
+ *
+ * Its own question rather than a caller's, because a caller may have asked for
+ * an answer in half a second and been told no. Long enough that a busy worker
+ * still answers, short enough that a successor is not left waiting on a corpse.
+ */
+const CONFIRM_MS = 2_000;
+/** How long a successor waits for an incumbent to let go before leaving it alone. */
+const RETIRE_WAIT_MS = 8_000;
 
 /** 0700, and verified after creation rather than assumed. */
 function prepareDirectory(socketPath: string): void {
@@ -82,10 +92,23 @@ export async function main(): Promise<void> {
   let server: Server | undefined;
   let socketPath: string | undefined;
 
+  let listening = false;
+
+  /**
+   * Lets go of the endpoint, with exactly one unlink of the path.
+   *
+   * `server.close()` is what removes a unix socket, and it removes whatever is
+   * at that name rather than the socket it opened. A second unlink from here
+   * could therefore delete a successor's socket that took the name in between,
+   * which is the same theft this file exists to prevent, arriving late. So the
+   * explicit unlink is only for a path this process reserved and never served.
+   */
   const cleanup = (): void => {
+    const path = socketPath;
+    socketPath = undefined;
     try { server?.close(); } catch { /* never listened */ }
-    if (process.platform !== 'win32' && socketPath !== undefined) {
-      try { unlinkSync(socketPath); } catch { /* already gone */ }
+    if (!listening && process.platform !== 'win32' && path !== undefined) {
+      try { unlinkSync(path); } catch { /* already gone */ }
     }
   };
 
@@ -97,6 +120,34 @@ export async function main(): Promise<void> {
       waiting.set(id, (reply) => { clearTimeout(timer); resolve(reply); });
       writeToChrome({ id, op, args });
     });
+
+  /** True while a confirmation is in flight, so a burst of timeouts asks once. */
+  let confirming = false;
+
+  /**
+   * Gives the endpoint back when the extension behind it has gone.
+   *
+   * A request that times out is the first sign, and on its own it only says the
+   * extension was slow for one caller's budget, so it is confirmed with a `ping`
+   * of this host's own. Two silences mean there is nothing to relay to, and a
+   * host in that state is worse than no host: its socket answers every caller
+   * with a timeout, and the profile that could serve the endpoint cannot have it
+   * while this one holds the name. Letting go is also what lets a successor bind
+   * without taking a path out from under a running server.
+   */
+  const retireIfTheExtensionIsGone = async (): Promise<void> => {
+    if (confirming || !listening) { return; }
+    confirming = true;
+    const alive = await askExtension('ping', {}, CONFIRM_MS);
+    confirming = false;
+    if (alive !== undefined) { return; }
+    process.stderr.write(
+      'the extension stopped answering, so this host is giving up its endpoint and exiting. Chrome can stop '
+      + 'a service worker while leaving this process its pipe, and an endpoint nobody can serve is worse than '
+      + 'none: the next caller is told the extension is not connected, which is true.\n');
+    cleanup();
+    process.exit(0);
+  };
 
   readFromChrome((message) => {
     if (!isResponse(message)) { return; }
@@ -139,6 +190,7 @@ export async function main(): Promise<void> {
           if (!waiting.delete(id)) { return; }
           const reply: SocketReply = { ok: false, error: 'the extension did not answer' };
           try { connection.write(`${JSON.stringify(reply)}\n`); } catch { /* gone */ }
+          void retireIfTheExtensionIsGone();
         }, request.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
         waiting.set(id, (reply) => {
@@ -219,7 +271,17 @@ export async function main(): Promise<void> {
   socketPath = endpointPathFor(id);
   prepareDirectory(socketPath);
   await claimEndpoint(socketPath);
+  // Two hosts can reach a freed name in the same breath, and the one that loses
+  // gets EADDRINUSE. Without this it is an unhandled error event and a stack
+  // trace in the extension's log; with it, the loser is simply the one that
+  // leaves, which is what it would have done had it asked a moment later.
+  server.on('error', (failure: NodeJS.ErrnoException) => {
+    process.stderr.write(`this host could not take ${String(socketPath)}: ${failure.message}\n`);
+    process.exit(0);
+  });
+
   server.listen(socketPath, () => {
+    listening = true;
     if (process.platform !== 'win32' && socketPath !== undefined) { chmodSync(socketPath, 0o600); }
   });
 
@@ -252,31 +314,9 @@ async function claimEndpoint(socketPath: string): Promise<void> {
   if (process.platform === 'win32') { return; }
   if (!existsSync(socketPath)) { return; }
 
-  const alive = await new Promise<boolean>((resolve) => {
-    const probe = connect(socketPath);
-    let text = '';
-    const settle = (value: boolean): void => { probe.destroy(); resolve(value); };
-    // A socket that neither connects nor errors is not a working host either.
-    const timer = setTimeout(() => { settle(false); }, INCUMBENT_MS);
-    timer.unref();
-    probe.on('connect', () => {
-      probe.write(`${JSON.stringify({ op: 'ping', args: {}, timeoutMs: INCUMBENT_MS })}\n`);
-    });
-    probe.on('data', (chunk) => {
-      text += chunk.toString('utf8');
-      const cut = text.indexOf('\n');
-      if (cut === -1) { return; }
-      clearTimeout(timer);
-      try {
-        settle((JSON.parse(text.slice(0, cut)) as { ok?: unknown }).ok === true);
-      } catch {
-        settle(false);
-      }
-    });
-    probe.on('error', () => { clearTimeout(timer); settle(false); });
-  });
+  const owner = await askOwner(socketPath);
 
-  if (alive) {
+  if (owner === 'answering') {
     process.stderr.write(
       `another yoke host already owns ${socketPath}. This one is exiting rather than taking it, `
       + 'because doing so would point the server at a different browser profile. Each profile '
@@ -284,7 +324,62 @@ async function claimEndpoint(socketPath: string): Promise<void> {
     process.exit(0);
   }
 
-  try { unlinkSync(socketPath); } catch { /* nothing there */ }
+  if (owner === 'nobody') {
+    // Nothing is listening, so the file is what a host killed before it could
+    // clean up leaves behind, and removing it is the only way past it.
+    try { unlinkSync(socketPath); } catch { /* nothing there */ }
+    return;
+  }
+
+  // Listening and not answering: a host that has lost its extension. The ping
+  // above is what makes it notice, and it gives the endpoint up itself.
+  //
+  // Waiting rather than unlinking, because `server.close()` removes whatever
+  // holds the name at the moment it runs, not the socket it opened. Taking the
+  // path from a server that is still up means losing it later, when that server
+  // finally stops and takes the successor's socket with it.
+  const deadline = Date.now() + RETIRE_WAIT_MS;
+  while (existsSync(socketPath)) {
+    if (Date.now() > deadline) {
+      process.stderr.write(
+        `the host on ${socketPath} is not answering and has not let go, so this one is exiting rather `
+        + 'than taking a name another process is still serving.\n');
+      process.exit(0);
+    }
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+  }
+}
+
+/** What is behind an endpoint: an extension that answers, one that does not, or no process at all. */
+type Owner = 'answering' | 'silent' | 'nobody';
+
+function askOwner(socketPath: string): Promise<Owner> {
+  return new Promise<Owner>((resolve) => {
+    const probe = connect(socketPath);
+    let text = '';
+    let connected = false;
+    const settle = (value: Owner): void => { probe.destroy(); resolve(value); };
+    // Longer than the budget the question carries, so the host's own answer
+    // arrives first and a timeout here means it did not even manage that.
+    const timer = setTimeout(() => { settle(connected ? 'silent' : 'nobody'); }, INCUMBENT_MS + 500);
+    timer.unref();
+    probe.on('connect', () => {
+      connected = true;
+      probe.write(`${JSON.stringify({ op: 'ping', args: {}, timeoutMs: INCUMBENT_MS })}\n`);
+    });
+    probe.on('data', (chunk: Buffer) => {
+      text += chunk.toString('utf8');
+      const cut = text.indexOf('\n');
+      if (cut === -1) { return; }
+      clearTimeout(timer);
+      try {
+        settle((JSON.parse(text.slice(0, cut)) as { ok?: unknown }).ok === true ? 'answering' : 'silent');
+      } catch {
+        settle('silent');
+      }
+    });
+    probe.on('error', () => { clearTimeout(timer); settle('nobody'); });
+  });
 }
 
 // Runs unconditionally, because this file exists only to be executed.

@@ -149,7 +149,11 @@ function ask(path: string, op: string, timeoutMs = 3_000): Promise<Record<string
     let text = '';
     const settle = (value: Record<string, unknown> | undefined): void => { socket.destroy(); resolve(value); };
     const timer = setTimeout(() => { settle(undefined); }, timeoutMs);
-    socket.on('connect', () => { socket.write(`${JSON.stringify({ op, args: {} })}\n`); });
+    // With no budget the relay waits its own default, which outlasts any patience
+    // a test has, so the question carries one a little shorter than this wait.
+    socket.on('connect', () => {
+      socket.write(`${JSON.stringify({ op, args: {}, timeoutMs: Math.max(500, timeoutMs - 500) })}\n`);
+    });
     socket.on('data', (chunk: Buffer) => {
       text += chunk.toString('utf8');
       const cut = text.indexOf('\n');
@@ -193,7 +197,10 @@ async function serving(path: string, withinMs = 9_000): Promise<boolean> {
   }
 }
 
-test('a host takes an endpoint whose incumbent cannot answer', { skip }, async () => {
+test('a host waits out an incumbent that answers nothing, and never takes its name', { skip }, async () => {
+  // The incumbent here never lets go, which is what an older host does. Taking
+  // the path from a server that is still listening is the thing that cannot be
+  // done safely, so the successor asks, waits, and leaves rather than binding.
   const runtime = mkdtempSync(join(tmpdir(), 'yoke-host-test-'));
   mkdirSync(join(runtime, 'yoke'), { recursive: true, mode: 0o700 });
   const path = join(runtime, 'yoke', 'ab12cd34.sock');
@@ -202,10 +209,68 @@ test('a host takes an endpoint whose incumbent cannot answer', { skip }, async (
     ? { ok: true, data: { id: 'ab12cd34', label: 'work' } }
     : { ok: true, data: { tabs: [{ id: 1, windowId: 1, url: 'https://example.com', title: 'one' }] } }), runtime);
   try {
-    assert.ok(await serving(path), 'the new host should end up serving the endpoint');
-    assert.ok(corpse.asked.includes('ping'), 'it should have asked the incumbent for proof of life');
+    assert.equal(await chrome.stopped, 0, 'the successor steps aside rather than binding over a live server');
+    assert.ok(corpse.asked.includes('ping'), 'and it asked the incumbent for proof of life first');
+    assert.ok(existsSync(path), 'the incumbent still has its socket');
   } finally {
     corpse.server.close();
+    chrome.stop();
+  }
+});
+
+test('a takeover survives the incumbent finally shutting down', { skip }, async () => {
+  // The sequence that makes stealing a path wrong. A unix socket is unlinked by
+  // `server.close()`, so a host that is still listening when its name is taken
+  // removes the successor's socket when it eventually stops, and an endpoint
+  // that looked claimed disappears with no one at fault.
+  const runtime = mkdtempSync(join(tmpdir(), 'yoke-host-test-'));
+  mkdirSync(join(runtime, 'yoke'), { recursive: true, mode: 0o700 });
+  const path = join(runtime, 'yoke', 'ab12cd34.sock');
+  const corpse = await incumbent(path, { ok: false, error: 'the extension did not answer' });
+  // A host that finds its extension gone lets go of its endpoint and stops.
+  const retired = new Promise<void>((resolve) => {
+    const watch = setInterval(() => {
+      if (corpse.asked.length > 0) {
+        clearInterval(watch);
+        corpse.server.close(() => { resolve(); });
+      }
+    }, 50);
+  });
+  const chrome = play((op) => (op === 'identify'
+    ? { ok: true, data: { id: 'ab12cd34', label: 'work' } }
+    : { ok: true, data: { tabs: [{ id: 1, windowId: 1, url: 'https://example.com', title: 'one' }] } }), runtime);
+  try {
+    assert.ok(await serving(path), 'the new host should end up serving the endpoint');
+    await retired;
+    // Give the close its chance to take the name with it.
+    await new Promise((resolve) => { setTimeout(resolve, 300); });
+
+    assert.ok(existsSync(path), 'the successor keeps its socket when the incumbent stops');
+    assert.equal((await ask(path, 'ping'))?.['ok'], true, 'and still answers on it');
+  } finally {
+    corpse.server.close();
+    chrome.stop();
+  }
+});
+
+test('a host gives up its endpoint when its extension stops answering', { skip }, async () => {
+  let answering = true;
+  const chrome = play((op) => {
+    if (!answering) { return undefined; }
+    if (op === 'identify') { return { ok: true, data: { id: 'ab12cd34', label: 'work' } }; }
+    return { ok: true, data: { tabs: [{ id: 1, windowId: 1, url: 'https://example.com', title: 'one' }] } };
+  });
+  const path = join(chrome.endpoints, 'ab12cd34.sock');
+  try {
+    await settle(chrome);
+    assert.ok(existsSync(path), 'it claimed the endpoint while the extension answered');
+
+    answering = false;
+    assert.equal((await ask(path, 'ping', 6_000))?.['error'], 'the extension did not answer');
+
+    assert.equal(await chrome.stopped, 0, 'a host with no extension behind it should stop');
+    assert.equal(existsSync(path), false, 'and take its socket with it');
+  } finally {
     chrome.stop();
   }
 });
