@@ -1,5 +1,7 @@
 # Chrome Web Store listing
 
+The published listing is [Yoke](https://chromewebstore.google.com/detail/yoke/mebojgahcmmffbaonhnmmjhmbdbfbamm). A store install gets the id `mebojgahcmmffbaonhnmmjhmbdbfbamm`, which is not the id an unpacked load gets, and `yoke install` allowlists both.
+
 Everything the dashboard asks for, ready to paste. The dashboard cannot be
 automated: Chrome refuses both `chrome.scripting` and `chrome.debugger` on the
 extensions gallery, so every field here has to be entered by hand.

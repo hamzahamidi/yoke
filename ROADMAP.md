@@ -83,12 +83,12 @@ Non-goals: still no recording or macros.
 
 ## v0.4.0: publication
 
-Theme: installable by someone who is not us.
+Theme: installable by someone who is not us. Done, inside the 0.1.x line rather than as a release of its own, and the surprise is recorded rather than smoothed over.
 
-- Chrome Web Store listing, with the privacy policy and permission justifications that `debugger` and host access will be asked to defend. Review is typically days and can be weeks, so publication keeps its own release clock.
-- Reproducible build from a tagged commit, so the published bundle can be checked against source. An extension asking for these permissions has to be auditable, and "trust the listing" is not auditable.
-- Verify the store honours the pinned `key`, so the published id matches the one the native messaging manifest allowlists. If it does not, the host registration points at the wrong id and nothing connects, which is worth finding before shipping.
-- npm publish of `yoke-mcp`, which has not happened yet.
+- On the Chrome Web Store as [Yoke](https://chromewebstore.google.com/detail/yoke/mebojgahcmmffbaonhnmmjhmbdbfbamm), with the privacy policy and the permission justifications `debugger` and host access had to defend. Review keeps its own clock, so the listing sits behind a release until it clears.
+- The store does not honour the pinned `key`, which was the bullet that said verify, and the answer was no. A packaged upload may not carry one, so the store mints an id of its own: a store install is `mebojgahcmmffbaonhnmmjhmbdbfbamm` and an unpacked load stays `oceljemfocgfidhhdlbojkbkmlbfclna`. `yoke install` allowlists both, which is the only reason native messaging works either way.
+- `yoke-mcp` is on npm. 0.1.0 went out by hand, because npm will not configure a trusted publisher for a package that does not exist yet. Every version since publishes from a `v*` tag over OIDC with provenance, and a person approves the `npm` environment before anything reaches the registry.
+- The store package is built by CI from the tag and attached to the release with its SHA-256, so the zip a human uploads is the one CI built and checked. Contents are reproducible: rebuilding 0.1.5 locally gives files byte identical to the release zip. The archive is not, because zip metadata differs, so an audit compares files rather than digests.
 
 ## v0.5.x: stabilisation
 

@@ -1,6 +1,7 @@
 # yoke
 
 [![npm](https://img.shields.io/npm/v/yoke-mcp?color=0e8fa3)](https://www.npmjs.com/package/yoke-mcp)
+[![chrome web store](https://img.shields.io/chrome-web-store/v/mebojgahcmmffbaonhnmmjhmbdbfbamm?color=0e8fa3)](https://chromewebstore.google.com/detail/yoke/mebojgahcmmffbaonhnmmjhmbdbfbamm)
 [![tests](https://github.com/hamzahamidi/yoke/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/hamzahamidi/yoke/actions/workflows/test.yml)
 [![provenance](https://img.shields.io/badge/npm-signed%20provenance-0e8fa3)](https://www.npmjs.com/package/yoke-mcp#provenance)
 [![node](https://img.shields.io/node/v/yoke-mcp)](https://nodejs.org)
@@ -104,9 +105,22 @@ yoke grew out of measurements of Anthropic's Claude in Chrome MCP bridge. That b
 
 yoke is not affiliated with or endorsed by Anthropic or Google. It works with any client that speaks Model Context Protocol.
 
+## Install
+
+The extension is on the Chrome Web Store as [Yoke](https://chromewebstore.google.com/detail/yoke/mebojgahcmmffbaonhnmmjhmbdbfbamm). Both halves are needed, because Chrome only hands a native messaging connection to a host it started itself:
+
+```sh
+npm install -g yoke-mcp
+yoke install
+```
+
+Then add the extension from the link above and run `yoke doctor`, which names the first broken link in the chain rather than leaving you to guess.
+
+Every store version is reviewed before it ships, and review takes days, so the listing sits behind npm after a release. The badge at the top says which version is published today. Building from source is how you run the newest extension code.
+
 ## Install from source
 
-yoke is not on the Chrome Web Store. You must build it from source and load the extension unpacked.
+Build from source to run extension code the store has not published yet, or to audit what you are loading.
 
 You need Node 22 or later and a Chromium based browser. The manifest requires Chrome 116 or later. Chrome, Chromium, Edge, and Brave registration paths are present. Only macOS has been exercised so far.
 
