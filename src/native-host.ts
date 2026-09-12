@@ -275,9 +275,13 @@ export async function main(): Promise<void> {
   // gets EADDRINUSE. Without this it is an unhandled error event and a stack
   // trace in the extension's log; with it, the loser is simply the one that
   // leaves, which is what it would have done had it asked a moment later.
+  //
+  // Only that one is ordinary. A permission error, a descriptor limit or a
+  // filesystem that will not hold the socket are all reasons this host could not
+  // do its job, and exiting 0 on them would tell Chrome everything went fine.
   server.on('error', (failure: NodeJS.ErrnoException) => {
     process.stderr.write(`this host could not take ${String(socketPath)}: ${failure.message}\n`);
-    process.exit(0);
+    process.exit(failure.code === 'EADDRINUSE' ? 0 : 1);
   });
 
   server.listen(socketPath, () => {
@@ -302,13 +306,22 @@ export async function main(): Promise<void> {
  * returning 0 while the visible window held 40 tabs.
  *
  * So the owner is asked to prove it: a `ping`, which only reaches an answer
- * through an extension that is still there. An answer means a live host owns the
- * path and this one has nothing to offer, so it exits and Chrome surfaces that to
- * the extension rather than the two of them trading the socket back and forth.
- * Anything else, whether a refused connection, silence, or the relay's own
- * "the extension did not answer", means the file is a corpse and unlinking it is
- * right. A connect that merely succeeds proves only that a process is there,
- * which a host that has outlived its service worker also manages.
+ * through an extension that is still there. A connect that merely succeeds
+ * proves a process is listening, which a host that has outlived its service
+ * worker also manages. What the answer decides:
+ *
+ * - An answer means a live host owns the path and this one has nothing to offer,
+ *   so it exits and Chrome surfaces that to the extension rather than the two of
+ *   them trading the socket back and forth.
+ * - A refused connection means nothing is listening and the file is what a host
+ *   killed before it could clean up left behind. Unlinking it is the only way
+ *   past it, and nothing can lose by it.
+ * - Silence from something that did accept the connection means a host that has
+ *   lost its extension and has not noticed yet. The ping is what makes it notice,
+ *   and it lets the endpoint go itself. This one waits for that rather than
+ *   unlinking, because `server.close()` removes whatever holds the name when it
+ *   runs: binding over a live server means losing the socket later, when that
+ *   server stops.
  */
 async function claimEndpoint(socketPath: string): Promise<void> {
   if (process.platform === 'win32') { return; }
