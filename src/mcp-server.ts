@@ -19,7 +19,7 @@ import {
 import { ask, ExtensionUnavailable, NOT_CONNECTED } from './socket-client.js';
 
 export const SERVER_NAME = 'yoke';
-export const SERVER_VERSION = '0.1.4';
+export const SERVER_VERSION = '0.1.5';
 export const PROTOCOL_VERSION = '2024-11-05';
 
 /**
