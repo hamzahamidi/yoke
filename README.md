@@ -295,7 +295,7 @@ From a checkout that has not been linked, replace `yoke` with `node dist/cli.js`
 5. Element references expire after navigation or a page render. Console and network history starts when yoke first attaches to that tab, not before.
 6. Screenshots capture the page viewport, not browser chrome such as the address bar or tab strip.
 7. Two different browsers that both run the extension, such as Chrome and Brave, number their tabs independently. A tab id both report is refused rather than routed, because it cannot be sent to both. Two profiles of the same Chrome never collide.
-8. Chrome's internal pages cannot be read or driven. Neither can the Chrome Web Store or the extensions gallery: Chrome refuses both `chrome.scripting` and `chrome.debugger` there, so no extension can automate them, including this one. Publishing an extension is therefore a manual job by design.
+8. Chrome's internal pages cannot be read or driven. Neither can the Chrome Web Store or the extensions gallery: Chrome refuses both `chrome.scripting` and `chrome.debugger` there, so no extension can automate them, including this one. Editing the store listing is therefore manual. Releases reach the store through its API from CI, as described in `docs/store-listing.md`.
 
 ## Uninstall
 

@@ -14,13 +14,21 @@ working copy. Building locally still works and produces the same thing:
     npm run package      # dist/store/yoke-<version>.zip
     npm run screenshot   # docs/store/screenshot-1280x800.png
 
-There is deliberately no CI upload to the store. The `chromewebstore` OAuth scope
-is publisher wide with no per-item scoping, so a leaked credential could push code
-to every existing user through silent auto-update, into an extension holding
-`debugger` and `<all_urls>`, with nothing for them to decline. This repository
-holds no long-lived secrets (npm publishes over OIDC), and a manual review gates
-every store version anyway, so automating the upload would trade that for one
-saved click.
+Every `v*` tag also uploads that zip to the store and submits it for review, once
+a person approves the `chrome-web-store` environment on the run. The job holds no
+stored secret. The `chromewebstore` scope is publisher wide, so a leaked credential
+could push code to every existing user through silent auto-update, into an
+extension holding `debugger` and `<all_urls>`. The job therefore exchanges the
+run's OIDC token for a 30 minute access token of a service account, through a
+Workload Identity provider that only accepts tag runs of this repository in that
+environment. It checks out no code and installs no packages. The upload itself is
+[publish-to-chrome-web-store](https://github.com/hamzahamidi/publish-to-chrome-web-store),
+which skips a version already in the store and stops before uploading when the
+version is not higher than the published one or another version is in review.
+
+The job stays skipped until the repository variables `CWS_WIF_PROVIDER` and
+`CWS_SERVICE_ACCOUNT` exist. The listing text, screenshots,
+privacy answers and visibility remain manual.
 
 `npm run package` handles the two things the store rejects an upload over.
 
