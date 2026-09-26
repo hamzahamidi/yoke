@@ -113,25 +113,16 @@ jobs:
         if: steps.published.outputs.already == 'false'
         run: npm publish
 
-  # The extension half. This deliberately does NOT upload to the Chrome Web
-  # Store, and the reason is the credential rather than the effort.
-  #
-  # The chromewebstore OAuth scope is publisher wide with no per-item scoping, so
-  # a leaked token can push code to every existing user of every extension this
-  # account owns, through silent auto-update, into an extension holding debugger
-  # and <all_urls>, with nothing for the victim to decline. This repository holds
-  # no long-lived secrets at all (npm goes over OIDC), and a manual review gates
-  # every store version anyway, so automating the upload would trade that
-  # posture for one saved click.
-  #
-  # What it does instead is build the package here and attach it to the release,
-  # so the zip a human uploads is the one CI built and checked, rather than
-  # whatever was sitting in a working copy.
+  # The extension half: build the store package here and attach it to the
+  # release, so the zip that reaches the store is the one CI built and checked
+  # rather than whatever was sitting in a working copy.
   store-package:
     needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      zip: ${{ steps.digest.outputs.path }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -167,3 +158,58 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag --title "$GITHUB_REF_NAME"
           gh release upload "$GITHUB_REF_NAME" "${{ steps.digest.outputs.path }}" --clobber
+      - uses: actions/upload-artifact@v7
+        with:
+          name: store-package
+          path: ${{ steps.digest.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # Uploads that zip to the Chrome Web Store and submits it for review.
+  #
+  # The chromewebstore scope is publisher wide, so whoever holds a token can push
+  # code to every user of every extension on the account, into one holding
+  # debugger and <all_urls>. That is why nothing long-lived exists for it: the
+  # job trades its OIDC token for a 30 minute access token of a service account,
+  # through a Workload Identity provider that only accepts tag runs of this
+  # repository in the chrome-web-store environment, which waits for a person to
+  # approve it. The job checks out no code and installs no packages, so the only
+  # code that runs next to the token is the two actions below.
+  chrome-web-store:
+    needs: [publish, store-package]
+    if: vars.CWS_WIF_PROVIDER != '' && vars.CWS_SERVICE_ACCOUNT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: chrome-web-store
+    # The store submits whichever package was uploaded last, so two releases
+    # must not upload at the same time.
+    concurrency:
+      group: chrome-web-store
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: store-package
+          path: dist/store
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.CWS_WIF_PROVIDER }}
+          service_account: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          access_token_lifetime: 1800s
+          create_credentials_file: false
+          export_environment_variables: false
+      # Skips a version that is already in the store, so re-running a release is
+      # harmless. Stops before uploading when the version is not higher than the
+      # published one or another version is still in review.
+      - uses: hamzahamidi/publish-to-chrome-web-store@v1
+        with:
+          access-token: ${{ steps.auth.outputs.access_token }}
+          publisher-id: eebeaf6a-4418-44e5-9b37-2cc1f814532d
+          item-id: mebojgahcmmffbaonhnmmjhmbdbfbamm
+          zip: ${{ needs.store-package.outputs.zip }}
