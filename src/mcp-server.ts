@@ -468,7 +468,7 @@ async function handleToolListTabs(name: string, args: Record<string, unknown>): 
   return undefined;
 }
 
-async function handleToolListTabGroups(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
+async function handleToolListTabGroups(name: string): Promise<ToolResult | undefined> {
   if (name === 'list_tab_groups') {
     const { browsers, tabs } = await allTabs();
     if (browsers.length === 0) {
