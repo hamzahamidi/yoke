@@ -47,7 +47,7 @@
   },
   "main": "dist/mcp-server.js",
   "devDependencies": {
-    "@types/chrome": "^0.3.6",
+    "@types/chrome": "^0.0.270",
     "@types/node": "^22.0.0",
     "c8": "^12.0.0",
     "typescript": "^7.0.2"
