@@ -309,10 +309,10 @@ chrome.runtime.onMessage.addListener((message: PopupRequest, _sender, respond) =
         const reply: PopupReply = { kind: 'labelled', id: who.id, label: who.label };
         respond(reply);
       })
-      .catch((thrown: unknown) => {
+      .catch((error_: unknown) => {
         // Answered rather than dropped: a closed channel reads in the popup as
         // a save that silently did nothing.
-        const reply: PopupReply = { kind: 'failed', reason: thrown instanceof Error ? thrown.message : String(thrown) };
+        const reply: PopupReply = { kind: 'failed', reason: error_ instanceof Error ? error_.message : String(error_) };
         respond(reply);
       });
     return true;
@@ -403,10 +403,7 @@ async function handle(message: Request): Promise<unknown> {
 
     case 'typeText': {
       const args = message.args as Operations['typeText']['args'];
-      if (args.ref !== undefined) {
-        const point = await pointFor(args.tabId, args.ref);
-        await clickAt(args.tabId, point, 'left', 1);
-      }
+      await focusRef(args.tabId, args.ref);
       await insertText(args.tabId, args.text);
       if (args.pressEnter === true) { await dispatchKey(args.tabId, 'Enter'); }
       return { tabId: args.tabId, typed: args.text.length };
@@ -414,10 +411,7 @@ async function handle(message: Request): Promise<unknown> {
 
     case 'pressKey': {
       const args = message.args as Operations['pressKey']['args'];
-      if (args.ref !== undefined) {
-        const point = await pointFor(args.tabId, args.ref);
-        await clickAt(args.tabId, point, 'left', 1);
-      }
+      await focusRef(args.tabId, args.ref);
       await dispatchKey(args.tabId, args.key);
       return { tabId: args.tabId, key: args.key };
     }
@@ -486,6 +480,12 @@ async function handle(message: Request): Promise<unknown> {
   }
 }
 
+async function focusRef(tabId: number, ref: string | undefined): Promise<void> {
+  if (ref === undefined) { return; }
+  const point = await pointFor(tabId, ref);
+  await clickAt(tabId, point, 'left', 1);
+}
+
 /** Narrows a tab id that has already been validated by the server. */
 const tabId2 = (value: number): number => value;
 
@@ -535,8 +535,8 @@ function connect(): void {
   if (port) { return; }
   try {
     port = chrome.runtime.connectNative(HOST);
-  } catch (failure) {
-    console.log('yoke: native host unavailable', failure);
+  } catch (error_) {
+    console.log('yoke: native host unavailable', error_);
     return;
   }
   const opened = port;
@@ -561,11 +561,11 @@ function connect(): void {
         const reply: Response = { id: message.id, ok: true, data };
         port?.postMessage(reply);
       })
-      .catch((thrown: unknown) => {
+      .catch((error_: unknown) => {
         const reply: Response = {
           id: message.id,
           ok: false,
-          error: thrown instanceof Error ? thrown.message : String(thrown),
+          error: error_ instanceof Error ? error_.message : String(error_),
         };
         port?.postMessage(reply);
       });

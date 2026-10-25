@@ -90,8 +90,8 @@ el('label-form').addEventListener('submit', (event) => {
         ? `Could not save: ${reply.reason}`
         : 'Not saved: the extension\'s running code predates this field. Reload Yoke at chrome://extensions.';
     })
-    .catch((thrown: unknown) => {
-      note.textContent = `Could not save: ${thrown instanceof Error ? thrown.message : String(thrown)}`;
+    .catch((error_: unknown) => {
+      note.textContent = `Could not save: ${error_ instanceof Error ? error_.message : String(error_)}`;
     })
     .finally(() => { button.disabled = false; void render(); });
 });
@@ -115,7 +115,7 @@ el('release').addEventListener('click', () => {
   });
 });
 
-void render();
+await render();
 
 // Kept current while the popup is open: a tab can be released or driven from
 // elsewhere, and a stale count here would be worse than no count.

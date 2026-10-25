@@ -35,7 +35,7 @@ const derived = [...digest.subarray(0, 16)]
   .map((byte) => byte.toString(16).padStart(2, '0'))
   .join('')
   .split('')
-  .map((nibble) => String.fromCharCode(97 + Number.parseInt(nibble, 16)))
+  .map((nibble) => String.fromCodePoint(97 + Number.parseInt(nibble, 16)))
   .join('');
 
 if (derived !== allowlisted) {

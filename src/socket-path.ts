@@ -47,7 +47,8 @@ export function endpointPathFor(id: string): string {
   if (process.platform === 'win32') {
     // The legacy id maps to the bare pre-existing name, not to a suffixed one,
     // so an extension that has not been reloaded lands where it always did.
-    return `\\\\.\\pipe\\${id === LEGACY_ID ? legacyPipe() : `${pipePrefix()}${id}`}`;
+    const pipeName = id === LEGACY_ID ? legacyPipe() : `${pipePrefix()}${id}`;
+    return `\\\\.\\pipe\\${pipeName}`;
   }
   return join(endpointDir(), `${id}.sock`);
 }
@@ -56,9 +57,12 @@ export function endpointPathFor(id: string): string {
 export function endpointIdOf(path: string): string | undefined {
   const name = path.split(/[\\/]/).pop() ?? '';
   if (process.platform === 'win32' && name === legacyPipe()) { return LEGACY_ID; }
-  const match = process.platform === 'win32'
-    ? (name.startsWith(pipePrefix()) ? name.slice(pipePrefix().length) : undefined)
-    : (name.endsWith('.sock') ? name.slice(0, -'.sock'.length) : undefined);
+  let match: string | undefined;
+  if (process.platform === 'win32') {
+    if (name.startsWith(pipePrefix())) { match = name.slice(pipePrefix().length); }
+  } else if (name.endsWith('.sock')) {
+    match = name.slice(0, -'.sock'.length);
+  }
   return isEndpointId(match) ? match : undefined;
 }
 

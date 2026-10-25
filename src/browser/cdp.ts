@@ -49,64 +49,74 @@ const push = <T>(buffer: T[], entry: T): void => {
  * delivers every attached target through this one listener, and adding it per
  * attachment would leak a listener per tab.
  */
+function remoteValue(value: unknown, description?: string): string {
+  if (value === undefined) { return description ?? ''; }
+  if (value === null) { return 'null'; }
+  if (typeof value === 'string') { return value; }
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value) ?? description ?? ''; } catch { return description ?? '[unavailable]'; }
+  }
+  return value.toString();
+}
+
+function recordConsoleCall(tab: TabState, params: unknown): void {
+  const event = params as { type?: string; args?: Array<{ value?: unknown; description?: string }> };
+  const text = (event.args ?? []).map((arg) => remoteValue(arg.value, arg.description)).join(' ');
+  push(tab.console, { level: event.type ?? 'log', text, at: Date.now() });
+}
+
+function recordLogEntry(tab: TabState, params: unknown): void {
+  const entry = (params as { entry?: { level?: string; text?: string; url?: string; lineNumber?: number } }).entry;
+  if (!entry) { return; }
+  push(tab.console, {
+    level: entry.level ?? 'info',
+    text: entry.text ?? '',
+    ...(entry.url === undefined ? {} : { url: entry.url }),
+    ...(entry.lineNumber === undefined ? {} : { line: entry.lineNumber }),
+    at: Date.now(),
+  });
+}
+
+function recordException(tab: TabState, params: unknown): void {
+  const details = (params as { exceptionDetails?: { text?: string; exception?: { description?: string } } })
+    .exceptionDetails;
+  push(tab.console, {
+    level: 'error',
+    text: details?.exception?.description ?? details?.text ?? 'uncaught exception',
+    at: Date.now(),
+  });
+}
+
+function recordRequest(tab: TabState, params: unknown): void {
+  const event = params as { request?: { method?: string; url?: string }; type?: string };
+  push(tab.network, {
+    method: event.request?.method ?? 'GET',
+    url: event.request?.url ?? '',
+    ...(event.type === undefined ? {} : { type: event.type }),
+    at: Date.now(),
+  });
+}
+
+function recordResponse(tab: TabState, params: unknown): void {
+  const event = params as { response?: { url?: string; status?: number } };
+  // Fills in the status on the most recent matching request rather than
+  // recording a second row for the same exchange.
+  const match = [...tab.network].reverse().find((entry) => entry.url === event.response?.url);
+  if (match && event.response?.status !== undefined) { match.status = event.response.status; }
+}
+
+const eventHandlers: Record<string, (tab: TabState, params: unknown) => void> = {
+  'Runtime.consoleAPICalled': recordConsoleCall,
+  'Log.entryAdded': recordLogEntry,
+  'Runtime.exceptionThrown': recordException,
+  'Network.requestWillBeSent': recordRequest,
+  'Network.responseReceived': recordResponse,
+};
+
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  const tabId = source.tabId;
-  if (tabId === undefined) { return; }
-  const tab = state.get(tabId);
-  if (!tab) { return; }
-
-  if (method === 'Runtime.consoleAPICalled') {
-    const event = params as { type?: string; args?: Array<{ value?: unknown; description?: string }> };
-    const text = (event.args ?? [])
-      .map((arg) => (arg.value !== undefined ? String(arg.value) : arg.description ?? ''))
-      .join(' ');
-    push(tab.console, { level: event.type ?? 'log', text, at: Date.now() });
-    return;
-  }
-
-  if (method === 'Log.entryAdded') {
-    const entry = (params as { entry?: { level?: string; text?: string; url?: string; lineNumber?: number } }).entry;
-    if (entry) {
-      push(tab.console, {
-        level: entry.level ?? 'info',
-        text: entry.text ?? '',
-        ...(entry.url === undefined ? {} : { url: entry.url }),
-        ...(entry.lineNumber === undefined ? {} : { line: entry.lineNumber }),
-        at: Date.now(),
-      });
-    }
-    return;
-  }
-
-  if (method === 'Runtime.exceptionThrown') {
-    const details = (params as { exceptionDetails?: { text?: string; exception?: { description?: string } } })
-      .exceptionDetails;
-    push(tab.console, {
-      level: 'error',
-      text: details?.exception?.description ?? details?.text ?? 'uncaught exception',
-      at: Date.now(),
-    });
-    return;
-  }
-
-  if (method === 'Network.requestWillBeSent') {
-    const event = params as { request?: { method?: string; url?: string }; type?: string };
-    push(tab.network, {
-      method: event.request?.method ?? 'GET',
-      url: event.request?.url ?? '',
-      ...(event.type === undefined ? {} : { type: event.type }),
-      at: Date.now(),
-    });
-    return;
-  }
-
-  if (method === 'Network.responseReceived') {
-    const event = params as { response?: { url?: string; status?: number } };
-    // Fills in the status on the most recent matching request rather than
-    // recording a second row for the same exchange.
-    const match = [...tab.network].reverse().find((entry) => entry.url === event.response?.url);
-    if (match && event.response?.status !== undefined) { match.status = event.response.status; }
-  }
+  if (source.tabId === undefined) { return; }
+  const tab = state.get(source.tabId);
+  if (tab) { eventHandlers[method]?.(tab, params); }
 });
 
 // Chrome detaches when a tab closes, DevTools opens, or the user dismisses the
@@ -161,8 +171,8 @@ export async function attach(tabId: number): Promise<{ attachedNow: boolean }> {
   if (tab.attached) { return { attachedNow: false }; }
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
-  } catch (failure) {
-    const message = failure instanceof Error ? failure.message : String(failure);
+  } catch (error_) {
+    const message = error_ instanceof Error ? error_.message : String(error_);
     // Chrome's own wording when DevTools holds the target. Worth translating,
     // because "another debugger" is not obviously "close your DevTools".
     if (/already attached/i.test(message)) {
@@ -170,7 +180,7 @@ export async function attach(tabId: number): Promise<{ attachedNow: boolean }> {
         `tab ${tabId} already has a debugger attached, which is usually DevTools being open on it. `
         + 'Chrome allows one debugger client per tab, so close DevTools there and retry.');
     }
-    throw failure;
+    throw error_;
   }
   tab.attached = true;
   // Enabled together so console and network history accumulate from the moment
@@ -263,9 +273,14 @@ export async function evaluate(
     };
   }
   const result = reply.result ?? {};
-  const value = result.value === undefined
-    ? result.description ?? 'undefined'
-    : typeof result.value === 'string' ? result.value : JSON.stringify(result.value);
+  let value: string;
+  if (result.value === undefined) {
+    value = result.description ?? 'undefined';
+  } else if (typeof result.value === 'string') {
+    value = result.value;
+  } else {
+    value = JSON.stringify(result.value);
+  }
   return { value, type: result.type ?? 'undefined', threw: false };
 }
 
@@ -328,7 +343,7 @@ export async function pressKey(tabId: number, key: string): Promise<void> {
   const common = { key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode };
   await send(tabId, 'Input.dispatchKeyEvent', {
     ...common,
-    type: spec.text === undefined ? 'keyDown' : 'keyDown',
+    type: 'keyDown',
     ...(spec.text === undefined ? {} : { text: spec.text }),
   });
   await send(tabId, 'Input.dispatchKeyEvent', { ...common, type: 'keyUp' });

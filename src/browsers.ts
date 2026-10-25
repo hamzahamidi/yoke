@@ -76,11 +76,11 @@ async function identify(endpoint: string): Promise<Browser | undefined> {
   try {
     const who = await ask(endpoint, 'identify', {}, { timeoutMs: 3_000 });
     return { endpoint, ...who, unidentified: false };
-  } catch (failure) {
+  } catch (error_) {
     // A dead socket is a corpse and is skipped. A live host whose extension
     // does not know the op is a browser we can still drive, so it is kept under
     // the id the host itself fell back to.
-    if (failure instanceof ExtensionUnavailable) { return undefined; }
+    if (error_ instanceof ExtensionUnavailable) { return undefined; }
     return {
       endpoint,
       id: endpointIdOf(endpoint) ?? LEGACY_ID,
@@ -110,10 +110,10 @@ export async function allTabs(): Promise<{ browsers: Browser[]; tabs: PlacedTab[
     try {
       const { tabs } = await ask(browser.endpoint, 'listTabs', {}, { timeoutMs: 5_000 });
       return tabs.map((tab): PlacedTab => ({ ...tab, browser }));
-    } catch (failure) {
+    } catch (error_) {
       // Gone between identify and now. Not an error in the listing.
-      if (failure instanceof ExtensionUnavailable) { return []; }
-      throw failure;
+      if (error_ instanceof ExtensionUnavailable) { return []; }
+      throw error_;
     }
   }));
   const tabs = listed.flat();
@@ -152,7 +152,10 @@ export async function chooseBrowser(selector: unknown, tool: string): Promise<Br
       `${browsers.length} browsers are connected: ${names}. ${tool} opens a tab in one of them, so pass `
       + 'browser with an id or label from list_browsers.');
   }
-  const wanted = String(selector);
+  if (typeof selector !== 'string') {
+    throw new NoSuchBrowser('browser must be an id or label from list_browsers.');
+  }
+  const wanted = selector;
   const byId = browsers.find((browser) => browser.id === wanted);
   if (byId !== undefined) { return byId; }
   // Labels are typed by a person and nothing stops two profiles getting the
@@ -245,10 +248,10 @@ export async function askTab<K extends OperationName>(
   const endpoint = await endpointForTab(args.tabId);
   try {
     return await ask(endpoint, op, args, options);
-  } catch (failure) {
+  } catch (error_) {
     // The host may have gone since the tab was placed. Once more from a fresh
     // listing, and after that the failure is the answer.
-    if (!(failure instanceof ExtensionUnavailable)) { throw failure; }
+    if (!(error_ instanceof ExtensionUnavailable)) { throw error_; }
     placement.delete(args.tabId);
     return ask(await endpointForTab(args.tabId), op, args, options);
   }

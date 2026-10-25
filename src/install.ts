@@ -221,8 +221,8 @@ export function install({
       const file = pathsFor(platform).join(dir, `${HOST_NAME}.json`);
       writeFileSync(file, `${JSON.stringify(manifestFor(launcher), null, 2)}\n`);
       written.push([browser, file]);
-    } catch (failure) {
-      skipped.push([browser, failure instanceof Error ? failure.message : String(failure)]);
+    } catch (error_) {
+      skipped.push([browser, error_ instanceof Error ? error_.message : String(error_)]);
     }
   }
   return { written, skipped, extensionId: EXTENSION_ID, hostName: HOST_NAME, platform };

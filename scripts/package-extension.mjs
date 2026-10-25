@@ -11,6 +11,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from
 import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
+const powershell = join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const manifest = JSON.parse(readFileSync(join(root, 'extension', 'manifest.json'), 'utf8'));
 
@@ -43,21 +44,21 @@ delete staged.key;
 writeFileSync(join(source, 'manifest.json'), `${JSON.stringify(staged, null, 2)}\n`);
 if (process.platform === 'win32') {
   // -Path with \* takes the contents rather than the directory itself.
-  execFileSync('powershell', [
+  execFileSync(powershell, [
     '-NoProfile', '-Command',
-    `Compress-Archive -Path '${source}\\*' -DestinationPath '${zipPath}' -Force`,
+    String.raw`Compress-Archive -Path '${source}\*' -DestinationPath '${zipPath}' -Force`,
   ], { stdio: 'inherit' });
 } else {
-  execFileSync('zip', ['-qr', zipPath, '.', '-x', '*.DS_Store'], { cwd: source, stdio: 'inherit' });
+  execFileSync('/usr/bin/zip', ['-qr', zipPath, '.', '-x', '*.DS_Store'], { cwd: source, stdio: 'inherit' });
 }
 
 // A zip whose manifest is not at the root is the failure worth catching here
 // rather than in the dashboard, which says only that the package is invalid.
 const listing = process.platform === 'win32'
-  ? execFileSync('powershell', ['-NoProfile', '-Command',
+  ? execFileSync(powershell, ['-NoProfile', '-Command',
     `Add-Type -A System.IO.Compression.FileSystem; `
     + `[IO.Compression.ZipFile]::OpenRead('${zipPath}').Entries.FullName`], { encoding: 'utf8' })
-  : execFileSync('unzip', ['-Z1', zipPath], { encoding: 'utf8' });
+  : execFileSync('/usr/bin/unzip', ['-Z1', zipPath], { encoding: 'utf8' });
 
 const entries = listing.split('\n').map((line) => line.trim()).filter(Boolean);
 if (!entries.includes('manifest.json')) {
@@ -67,12 +68,12 @@ if (!entries.includes('manifest.json')) {
 // Read back out of the archive rather than trusting the staging step, because
 // this is the field the store refuses the whole upload over.
 const packed = process.platform === 'win32'
-  ? execFileSync('powershell', ['-NoProfile', '-Command',
+  ? execFileSync(powershell, ['-NoProfile', '-Command',
     `Add-Type -A System.IO.Compression.FileSystem; `
     + `$z=[IO.Compression.ZipFile]::OpenRead('${zipPath}'); `
     + `$e=$z.GetEntry('manifest.json'); $r=New-Object IO.StreamReader($e.Open()); $r.ReadToEnd()`],
   { encoding: 'utf8' })
-  : execFileSync('unzip', ['-p', zipPath, 'manifest.json'], { encoding: 'utf8' });
+  : execFileSync('/usr/bin/unzip', ['-p', zipPath, 'manifest.json'], { encoding: 'utf8' });
 
 if ('key' in JSON.parse(packed)) {
   throw new Error('the packaged manifest still has a key field, which the store refuses');

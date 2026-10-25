@@ -19,7 +19,7 @@ import {
 import { ask, ExtensionUnavailable, NOT_CONNECTED } from './socket-client.js';
 
 export const SERVER_NAME = 'yoke';
-export const SERVER_VERSION = '0.1.7';
+export const SERVER_VERSION = '0.1.8';
 export const PROTOCOL_VERSION = '2024-11-05';
 
 /**
@@ -355,6 +355,25 @@ export const TOOLS = [
 const text = (value: string): ToolResult => ({ content: [{ type: 'text', text: value }] });
 const failed = (value: string): ToolResult => ({ content: [{ type: 'text', text: value }], isError: true });
 
+function stringArgument(args: Record<string, unknown>, key: string, fallback = ''): string {
+  const value = args[key];
+  if (value === undefined) { return fallback; }
+  if (typeof value !== 'string') { throw new TypeError(`${key} must be a string`); }
+  return value;
+}
+
+function optionalStringArgument(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  if (value === undefined) { return undefined; }
+  if (typeof value !== 'string') { throw new TypeError(`${key} must be a string`); }
+  return value;
+}
+
+function browserLabel(browser: Browser): string {
+  if (browser.unidentified) { return '(unidentified: reload the extension in this profile at chrome://extensions)'; }
+  return browser.label === '' ? '(unnamed)' : browser.label;
+}
+
 /**
  * A tab id, or a refusal naming what arrived instead.
  *
@@ -364,7 +383,7 @@ const failed = (value: string): ToolResult => ({ content: [{ type: 'text', text:
  */
 function asTabId(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new Error(`tab_id must be an integer from list_tabs, got ${JSON.stringify(value)}`);
+    throw new TypeError(`tab_id must be an integer from list_tabs, got ${JSON.stringify(value)}`);
   }
   return value;
 }
@@ -398,13 +417,13 @@ function mostlyOpen(urls: string[], limit = 3): string {
 export async function callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   try {
     return await dispatch(name, args);
-  } catch (failure) {
-    if (failure instanceof NoSuchTab || failure instanceof NoSuchBrowser) { return failed(failure.message); }
-    throw failure;
+  } catch (error_) {
+    if (error_ instanceof NoSuchTab || error_ instanceof NoSuchBrowser) { return failed(error_.message); }
+    throw error_;
   }
 }
 
-async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+async function handleToolListBrowsers(name: string): Promise<ToolResult | undefined> {
   if (name === 'list_browsers') {
     const { browsers, tabs } = await allTabs();
     if (browsers.length === 0) {
@@ -413,9 +432,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     const lines = browsers.map((browser) => {
       const own = tabs.filter((tab) => tab.browser === browser);
       const windows = new Set(own.map((tab) => tab.windowId)).size;
-      const label = browser.unidentified
-        ? '(unidentified: reload the extension in this profile at chrome://extensions)'
-        : browser.label === '' ? '(unnamed)' : browser.label;
+      const label = browserLabel(browser);
       return `${browser.id}\t${label}\t${own.length} tab(s)\t${windows} window(s)\t${mostlyOpen(own.map((tab) => tab.url))}`;
     });
     const hint = browsers.some((browser) => browser.label === '' && !browser.unidentified)
@@ -423,7 +440,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       : '';
     return text(`${browsers.length} browser(s) connected.\nid\tlabel\ttabs\twindows\tmostly\n${lines.join('\n')}${hint}`);
   }
+  return undefined;
+}
 
+async function handleToolListTabs(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'list_tabs') {
     const { browsers, tabs } = await allTabs();
     if (browsers.length === 0) {
@@ -436,14 +456,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     // The browser column appears only when there is a choice to show. One
     // profile reads exactly as it always has.
     const several = browsers.length > 1;
-    const lines = tabs.map((tab) =>
-      `${tab.id}\t${shownUrl(tab.url, full)}\t${tab.title.slice(0, 80)}${several ? `\t${displayName(tab.browser)}` : ''}`);
+    const lines = tabs.map((tab) => {
+      const browserColumn = several ? `\t${displayName(tab.browser)}` : '';
+      return `${tab.id}\t${shownUrl(tab.url, full)}\t${tab.title.slice(0, 80)}${browserColumn}`;
+    });
     const head = several
       ? `${tabs.length} open tab(s) across ${browsers.length} browsers, every window included.\nid\turl\ttitle\tbrowser`
       : `${tabs.length} open tab(s), every window included.\nid\turl\ttitle`;
     return text(`${head}\n${lines.join('\n')}`);
   }
+  return undefined;
+}
 
+async function handleToolListTabGroups(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'list_tab_groups') {
     const { browsers, tabs } = await allTabs();
     if (browsers.length === 0) {
@@ -458,15 +483,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     if (groups.length === 0) { return text('No tab groups.'); }
     const lines = groups.map(({ group, browser }) => {
       const members = tabs.filter((tab) => tab.browser === browser && tab.groupId === group.id).length;
-      return `${group.id}\t${JSON.stringify(group.title)}\t${group.color}\t${members} tab(s)${several ? `\t${displayName(browser)}` : ''}`;
+      const browserColumn = several ? `\t${displayName(browser)}` : '';
+      return `${group.id}\t${JSON.stringify(group.title)}\t${group.color}\t${members} tab(s)${browserColumn}`;
     });
     const head = several ? 'id\ttitle\tcolour\tmembers\tbrowser' : 'id\ttitle\tcolour\tmembers';
     return text(`${groups.length} group(s).\n${head}\n${lines.join('\n')}`);
   }
+  return undefined;
+}
 
+async function handleToolNavigate(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'navigate') {
     const tabId = asTabId(args['tab_id']);
-    const url = String(args['url'] ?? '');
+    const url = stringArgument(args, 'url');
     // Refused here rather than in the extension, because the reason is a policy
     // and policy belongs where it can be tested without a browser.
     if (!/^https?:\/\//i.test(url)) {
@@ -483,15 +512,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       : text(`Tab ${moved.tabId} is at ${shownUrl(moved.url)} but did not report finishing loading `
         + 'within the timeout. The page may still be working.');
   }
+  return undefined;
+}
 
+async function handleToolOpenTab(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'open_tab') {
-    const url = args['url'] === undefined ? undefined : String(args['url']);
+    const url = optionalStringArgument(args, 'url');
     if (url !== undefined && !/^https?:\/\//i.test(url)) {
       return failed(`open_tab takes an http or https URL, not ${JSON.stringify(url)}`);
     }
-    const groupTitle = args['group_title'] === undefined
-      ? DEFAULT_GROUP_TITLE
-      : String(args['group_title']);
+    const groupTitle = stringArgument(args, 'group_title', DEFAULT_GROUP_TITLE);
     // The one call that names no tab, so the browser has to be named instead
     // when there is more than one to choose from.
     const browser: Browser = await chooseBrowser(args['browser'], 'open_tab');
@@ -505,19 +535,28 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     // Three outcomes, not two. A reply with no groupId at all comes from an
     // extension build older than this server, and saying so beats printing the
     // word "undefined" at whoever is reading.
-    const where = typeof opened.groupId !== 'number'
-      ? ' (grouping unknown: the loaded extension predates it, so reload it at chrome://extensions)'
-      : opened.groupId === -1
-        ? ' (not grouped: Chrome refused, which does not affect the tab)'
-        : ` in group ${JSON.stringify(opened.groupTitle)}`;
+    let where: string;
+    if (typeof opened.groupId !== 'number') {
+      where = ' (grouping unknown: the loaded extension predates it, so reload it at chrome://extensions)';
+    } else if (opened.groupId === -1) {
+      where = ' (not grouped: Chrome refused, which does not affect the tab)';
+    } else {
+      where = ` in group ${JSON.stringify(opened.groupTitle)}`;
+    }
     return text(`Opened tab ${opened.tab.id} at ${shownUrl(opened.tab.url)}${where}\n${opened.tab.title}`);
   }
+  return undefined;
+}
 
+async function handleToolCloseTab(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'close_tab') {
     const { closed } = await askTab('closeTab', { tabId: asTabId(args['tab_id']) });
     return text(`Closed tab ${closed}.`);
   }
+  return undefined;
+}
 
+async function handleToolGetPageText(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'get_page_text') {
     const maxChars = typeof args['max_chars'] === 'number' ? args['max_chars'] : undefined;
     const page = await askTab('getPageText', {
@@ -527,14 +566,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     const note = page.truncated ? '\n\n[truncated]' : '';
     return text(`${page.title}\n${shownUrl(page.url)}\n---\n${page.text}${note}`);
   }
+  return undefined;
+}
 
+async function handleToolReadPageOrFind(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'read_page' || name === 'find') {
     const maxElements = typeof args['max_elements'] === 'number' ? args['max_elements'] : undefined;
     const page = await askTab('readPage', {
       tabId: asTabId(args['tab_id']),
       ...(maxElements === undefined ? {} : { maxElements }),
     });
-    const needle = name === 'find' ? String(args['text'] ?? '').toLowerCase() : null;
+    const searchText = name === 'find' ? stringArgument(args, 'text') : undefined;
+    const needle = searchText?.toLowerCase() ?? null;
     const shown = needle === null
       ? page.elements
       : page.elements.filter((e) => `${e.name} ${e.role} ${e.tag}`.toLowerCase().includes(needle));
@@ -546,18 +589,22 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     const rows = shown.map((e) => {
       const extra = [e.value ? `value=${JSON.stringify(e.value)}` : '', e.disabled ? 'disabled' : '']
         .filter(Boolean).join(' ');
-      return `${e.ref}\t${e.role}\t${e.name.slice(0, 70)}${extra ? `\t${extra}` : ''}`;
+      const extraColumn = extra ? `\t${extra}` : '';
+      return `${e.ref}\t${e.role}\t${e.name.slice(0, 70)}${extraColumn}`;
     });
     const note = page.truncated ? '\n[truncated; raise max_elements]' : '';
     return text(`${page.title}\n${shownUrl(page.url)}\n${shown.length} element(s)\nref\trole\tname\n${rows.join('\n')}${note}`);
   }
+  return undefined;
+}
 
+async function handleToolClick(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'click') {
     const button = args['button'];
     const clickCount = typeof args['click_count'] === 'number' ? args['click_count'] : undefined;
     const result = await askTab('click', {
       tabId: asTabId(args['tab_id']),
-      ref: String(args['ref'] ?? ''),
+      ref: stringArgument(args, 'ref'),
       ...(button === 'left' || button === 'right' || button === 'middle' ? { button } : {}),
       ...(clickCount === undefined ? {} : { clickCount }),
     });
@@ -577,30 +624,39 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     }
     return text(`Clicked ${result.ref}.`);
   }
+  return undefined;
+}
 
+async function handleToolTypeText(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'type_text') {
-    const ref = args['ref'] === undefined ? undefined : String(args['ref']);
+    const ref = optionalStringArgument(args, 'ref');
     const typed = await askTab('typeText', {
       tabId: asTabId(args['tab_id']),
-      text: String(args['text'] ?? ''),
+      text: stringArgument(args, 'text'),
       ...(ref === undefined ? {} : { ref }),
       pressEnter: args['press_enter'] === true,
     });
     return text(`Typed ${typed.typed} character(s)${args['press_enter'] === true ? ' and pressed Enter' : ''}.`);
   }
+  return undefined;
+}
 
+async function handleToolPressKey(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'press_key') {
-    const ref = args['ref'] === undefined ? undefined : String(args['ref']);
+    const ref = optionalStringArgument(args, 'ref');
     const pressed = await askTab('pressKey', {
       tabId: asTabId(args['tab_id']),
-      key: String(args['key'] ?? ''),
+      key: stringArgument(args, 'key'),
       ...(ref === undefined ? {} : { ref }),
     });
     return text(`Pressed ${pressed.key}.`);
   }
+  return undefined;
+}
 
+async function handleToolScroll(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'scroll') {
-    const ref = args['ref'] === undefined ? undefined : String(args['ref']);
+    const ref = optionalStringArgument(args, 'ref');
     const dx = typeof args['dx'] === 'number' ? args['dx'] : undefined;
     const dy = typeof args['dy'] === 'number' ? args['dy'] : undefined;
     const moved = await askTab('scroll', {
@@ -611,7 +667,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     });
     return text(`Scrolled by ${moved.dx}, ${moved.dy}.`);
   }
+  return undefined;
+}
 
+async function handleToolScreenshot(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'screenshot') {
     const format = args['format'] === 'jpeg' ? 'jpeg' : 'png';
     const quality = typeof args['quality'] === 'number' ? args['quality'] : undefined;
@@ -629,11 +688,14 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       images: [{ format: shot.format, base64: shot.base64 }],
     } as ToolResult;
   }
+  return undefined;
+}
 
+async function handleToolRunJavascript(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'run_javascript') {
     const outcome = await askTab('evaluate', {
       tabId: asTabId(args['tab_id']),
-      expression: String(args['expression'] ?? ''),
+      expression: stringArgument(args, 'expression'),
     }, { timeoutMs: 30_000 });
     // A thrown error is the answer, not a transport failure: the caller asked
     // what the page would do, and this is what it did.
@@ -641,7 +703,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       ? text(`threw: ${outcome.value}`)
       : text(`${outcome.type}: ${outcome.value}`);
   }
+  return undefined;
+}
 
+async function handleToolReadConsole(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'read_console') {
     const limit = typeof args['limit'] === 'number' ? args['limit'] : undefined;
     const seen = await askTab('consoleMessages', {
@@ -655,7 +720,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     const rows = seen.messages.map((m) => `${m.level}\t${m.text.slice(0, 200)}`);
     return text(`${preface}${seen.messages.length} message(s)\nlevel\ttext\n${rows.join('\n')}`);
   }
+  return undefined;
+}
 
+async function handleToolReadNetwork(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'read_network') {
     const limit = typeof args['limit'] === 'number' ? args['limit'] : undefined;
     const seen = await askTab('networkRequests', {
@@ -669,7 +737,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     const rows = seen.requests.map((r) => `${r.status ?? '...'}\t${r.method}\t${shownUrl(r.url)}`);
     return text(`${preface}${seen.requests.length} request(s)\nstatus\tmethod\turl\n${rows.join('\n')}`);
   }
+  return undefined;
+}
 
+async function handleToolGroupTabsOrUngroupTabs(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'group_tabs' || name === 'ungroup_tabs') {
     const raw = args['tab_ids'];
     if (!Array.isArray(raw) || raw.length === 0) {
@@ -680,8 +751,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       await ask(await endpointForTabs(tabIds), 'ungroupTabs', { tabIds });
       return text(`Ungrouped ${tabIds.length} tab(s). They are still open.`);
     }
-    const title = args['title'] === undefined ? DEFAULT_GROUP_TITLE : String(args['title']);
-    const color = args['color'] === undefined ? undefined : String(args['color']);
+    const title = stringArgument(args, 'title', DEFAULT_GROUP_TITLE);
+    const color = optionalStringArgument(args, 'color');
     const grouped = await ask(await endpointForTabs(tabIds), 'groupTabs', {
       tabIds,
       ...(title === undefined ? {} : { title }),
@@ -690,7 +761,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     return text(`${tabIds.length} tab(s) are now in group ${grouped.groupId} `
       + `${JSON.stringify(grouped.title)}.`);
   }
+  return undefined;
+}
 
+async function handleToolReleaseTab(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'release_tab') {
     const released = await askTab('release', { tabId: asTabId(args['tab_id']) });
     return text(released.released
@@ -700,8 +774,36 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           + 'network buffers are dropped. It stays in its group.'
       : `Tab ${released.tabId} was not being driven.`);
   }
+  return undefined;
+}
 
-  return failed(`unknown tool: ${name}`);
+const toolHandlers: Record<string, (name: string, args: Record<string, unknown>) => Promise<ToolResult | undefined>> = {
+  'list_browsers': handleToolListBrowsers,
+  'list_tabs': handleToolListTabs,
+  'list_tab_groups': handleToolListTabGroups,
+  'navigate': handleToolNavigate,
+  'open_tab': handleToolOpenTab,
+  'close_tab': handleToolCloseTab,
+  'get_page_text': handleToolGetPageText,
+  'read_page': handleToolReadPageOrFind,
+  'find': handleToolReadPageOrFind,
+  'click': handleToolClick,
+  'type_text': handleToolTypeText,
+  'press_key': handleToolPressKey,
+  'scroll': handleToolScroll,
+  'screenshot': handleToolScreenshot,
+  'run_javascript': handleToolRunJavascript,
+  'read_console': handleToolReadConsole,
+  'read_network': handleToolReadNetwork,
+  'group_tabs': handleToolGroupTabsOrUngroupTabs,
+  'ungroup_tabs': handleToolGroupTabsOrUngroupTabs,
+  'release_tab': handleToolReleaseTab,
+};
+
+async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  const handler = Object.hasOwn(toolHandlers, name) ? toolHandlers[name] : undefined;
+  if (handler === undefined) { return failed(`unknown tool: ${name}`); }
+  return (await handler(name, args)) ?? failed(`unknown tool: ${name}`);
 }
 
 export async function handle(request: JsonRpcRequest): Promise<unknown> {
@@ -736,13 +838,13 @@ export function main(): void {
 
     handle(request)
       .then((result) => { send({ jsonrpc: '2.0', id, result }); })
-      .catch((thrown: unknown) => {
+      .catch((error_: unknown) => {
         // An unreachable extension is a condition to report, not a crash: the
         // client should be told to install or load it rather than see a dead
         // server.
-        const message = thrown instanceof ExtensionUnavailable || thrown instanceof Error
-          ? thrown.message
-          : String(thrown);
+        const message = error_ instanceof ExtensionUnavailable || error_ instanceof Error
+          ? error_.message
+          : String(error_);
         send({ jsonrpc: '2.0', id, error: { code: -32000, message } });
       });
   });
