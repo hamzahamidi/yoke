@@ -89,6 +89,6 @@ export function listEndpoints(): string[] {
   if (!existsSync(dir)) { return []; }
   return readdirSync(dir)
     .filter((name) => endpointIdOf(name) !== undefined)
-    .sort()
+    .sort((left, right) => left.localeCompare(right, 'en'))
     .map((name) => join(dir, name));
 }

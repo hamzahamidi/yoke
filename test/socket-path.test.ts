@@ -5,9 +5,12 @@
 // work: node:path is bound to the real platform at import, so join() keeps
 // producing that platform's separators whatever the flag says.
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { LEGACY_ID, endpointIdOf, endpointPathFor } from '../dist/socket-path.js';
+import { LEGACY_ID, endpointIdOf, endpointPathFor, listEndpoints } from '../dist/socket-path.js';
 
 const windows = process.platform === 'win32';
 
@@ -17,6 +20,23 @@ test('on unix the legacy id is the socket every earlier release used', { skip: w
   assert.equal(endpointIdOf('/x/yoke/extension.sock'), LEGACY_ID);
   assert.equal(endpointIdOf('/x/yoke/14ab7cb7.sock'), '14ab7cb7');
   assert.equal(endpointIdOf('/x/yoke/notes.txt'), undefined);
+});
+
+test('on unix listEndpoints returns valid socket paths in alphabetical order', { skip: windows }, () => {
+  const runtime = mkdtempSync(join(tmpdir(), 'yoke-socket-path-'));
+  const previous = process.env['XDG_RUNTIME_DIR'];
+  process.env['XDG_RUNTIME_DIR'] = runtime;
+  const directory = join(runtime, 'yoke');
+  mkdirSync(directory);
+  for (const name of ['b.sock', 'a.sock', 'notes.txt', 'bad id.sock']) {
+    writeFileSync(join(directory, name), '');
+  }
+  try {
+    assert.deepEqual(listEndpoints(), [join(directory, 'a.sock'), join(directory, 'b.sock')]);
+  } finally {
+    if (previous === undefined) { delete process.env['XDG_RUNTIME_DIR']; } else { process.env['XDG_RUNTIME_DIR'] = previous; }
+    rmSync(runtime, { recursive: true, force: true });
+  }
 });
 
 test('on windows the legacy id is the bare pipe name, and a profile id is suffixed', { skip: !windows }, () => {

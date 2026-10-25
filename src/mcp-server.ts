@@ -20,7 +20,7 @@ import type { ResultOf } from './protocol.js';
 import { ask, ExtensionUnavailable, NOT_CONNECTED } from './socket-client.js';
 
 export const SERVER_NAME = 'yoke';
-export const SERVER_VERSION = '0.1.10';
+export const SERVER_VERSION = '0.1.11';
 export const PROTOCOL_VERSION = '2024-11-05';
 
 /**
