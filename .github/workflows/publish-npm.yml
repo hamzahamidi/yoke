@@ -19,8 +19,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: the tag and package.json must name the same version
@@ -62,17 +62,13 @@ jobs:
       # publish. There is no NPM_TOKEN in this repository.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # Trusted publishing needs Node 22.14.0 or later.
-          node-version: 22
+          node-version: 24.22.1
           registry-url: https://registry.npmjs.org
-      # Node 22 ships npm 10.9.x, below the 11.5.1 trusted publishing needs, so
-      # this upgrade is required rather than defensive.
       - name: npm new enough for trusted publishing
         run: |
-          npm install -g npm@latest
           node --version
           npm --version
           node -e '
@@ -124,8 +120,8 @@ jobs:
     outputs:
       zip: ${{ steps.digest.outputs.path }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - run: npm ci
@@ -158,7 +154,7 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag --title "$GITHUB_REF_NAME"
           gh release upload "$GITHUB_REF_NAME" "${{ steps.digest.outputs.path }}" --clobber
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: store-package
           path: ${{ steps.digest.outputs.path }}
@@ -190,12 +186,12 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: store-package
           path: dist/store
       - id: auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.CWS_WIF_PROVIDER }}
           service_account: ${{ vars.CWS_SERVICE_ACCOUNT }}
@@ -207,7 +203,7 @@ jobs:
       # Skips a version that is already in the store, so re-running a release is
       # harmless. Stops before uploading when the version is not higher than the
       # published one or another version is still in review.
-      - uses: hamzahamidi/publish-to-chrome-web-store@v1
+      - uses: hamzahamidi/publish-to-chrome-web-store@c8919147f8de0d6f1129bec36345e4a9aa638af9 # v1.2.2
         with:
           access-token: ${{ steps.auth.outputs.access_token }}
           publisher-id: eebeaf6a-4418-44e5-9b37-2cc1f814532d
