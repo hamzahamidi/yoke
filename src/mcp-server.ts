@@ -20,7 +20,7 @@ import type { ResultOf } from './protocol.js';
 import { ask, ExtensionUnavailable, NOT_CONNECTED } from './socket-client.js';
 
 export const SERVER_NAME = 'yoke';
-export const SERVER_VERSION = '0.1.9';
+export const SERVER_VERSION = '0.1.10';
 export const PROTOCOL_VERSION = '2024-11-05';
 
 /**
@@ -577,28 +577,45 @@ function renderPageElement(element: ResultOf<'readPage'>['elements'][number]): s
   return `${element.ref}\t${element.role}\t${element.name.slice(0, 70)}${extraColumn}`;
 }
 
-async function handleToolReadPageOrFind(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
-  if (name === 'read_page' || name === 'find') {
-    const maxElements = typeof args['max_elements'] === 'number' ? args['max_elements'] : undefined;
-    const page = await askTab('readPage', {
-      tabId: asTabId(args['tab_id']),
-      ...(maxElements === undefined ? {} : { maxElements }),
-    });
-    const searchText = name === 'find' ? stringArgument(args, 'text') : undefined;
-    const needle = searchText?.toLowerCase() ?? null;
-    const shown = needle === null
-      ? page.elements
-      : page.elements.filter((e) => `${e.name} ${e.role} ${e.tag}`.toLowerCase().includes(needle));
-    if (shown.length === 0) {
-      return text(needle === null
-        ? 'No interactive elements found on this page.'
-        : `Nothing on this page matches ${JSON.stringify(args['text'])}.`);
-    }
-    const rows = shown.map(renderPageElement);
-    const note = page.truncated ? '\n[truncated; raise max_elements]' : '';
-    return text(`${page.title}\n${shownUrl(page.url)}\n${shown.length} element(s)\nref\trole\tname\n${rows.join('\n')}${note}`);
+function readPageNeedle(name: string, args: Record<string, unknown>): string | null {
+  const searchText = name === 'find' ? stringArgument(args, 'text') : undefined;
+  return searchText?.toLowerCase() ?? null;
+}
+
+function matchingPageElements(
+  elements: ResultOf<'readPage'>['elements'],
+  needle: string | null,
+): ResultOf<'readPage'>['elements'] {
+  if (needle === null) { return elements; }
+  return elements.filter((element) => `${element.name} ${element.role} ${element.tag}`.toLowerCase().includes(needle));
+}
+
+function renderReadPageResult(
+  name: string,
+  args: Record<string, unknown>,
+  page: ResultOf<'readPage'>,
+): ToolResult {
+  const needle = readPageNeedle(name, args);
+  const shown = matchingPageElements(page.elements, needle);
+  if (shown.length === 0) {
+    const emptyMessage = needle === null
+      ? 'No interactive elements found on this page.'
+      : `Nothing on this page matches ${JSON.stringify(args['text'])}.`;
+    return text(emptyMessage);
   }
-  return undefined;
+  const rows = shown.map(renderPageElement);
+  const note = page.truncated ? '\n[truncated; raise max_elements]' : '';
+  return text(`${page.title}\n${shownUrl(page.url)}\n${shown.length} element(s)\nref\trole\tname\n${rows.join('\n')}${note}`);
+}
+
+async function handleToolReadPageOrFind(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
+  if (name !== 'read_page' && name !== 'find') { return undefined; }
+  const maxElements = typeof args['max_elements'] === 'number' ? args['max_elements'] : undefined;
+  const page = await askTab('readPage', {
+    tabId: asTabId(args['tab_id']),
+    ...(maxElements === undefined ? {} : { maxElements }),
+  });
+  return renderReadPageResult(name, args, page);
 }
 
 async function handleToolClick(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {

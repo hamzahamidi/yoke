@@ -22,6 +22,8 @@ interface FakeHost {
   id: string;
   label: string;
   tabs: Array<{ id: number; windowId: number; url: string; title: string }>;
+  elements?: Array<{ ref: string; role: string; name: string; tag: string; value?: string; disabled?: boolean }>;
+  truncated?: boolean;
   /** Every op the host was asked, in order. */
   received: string[];
   /** Answer identify with an unknown-op error, as an extension from before it would. */
@@ -72,12 +74,12 @@ function answer(host: FakeHost, request: { op: string; args?: Record<string, unk
         tabId,
         url: 'https://x/',
         title: `page in ${host.id}`,
-        elements: [
+        elements: host.elements ?? [
           { ref: 'e1', role: 'textbox', name: 'Search', tag: 'input', value: 'hello' },
           { ref: 'e2', role: 'button', name: 'Submit', tag: 'button', disabled: true },
           { ref: 'e3', role: 'link', name: 'Home', tag: 'a' },
         ],
-        truncated: true,
+        truncated: host.truncated ?? true,
       });
     }
     case 'openTab': {
@@ -185,6 +187,31 @@ test('read_page formats element values, disabled state, and truncation', { skip 
     assert.match(page.content[0]?.text ?? '', /e1\ttextbox\tSearch\tvalue="hello"/);
     assert.match(page.content[0]?.text ?? '', /e2\tbutton\tSubmit\tdisabled/);
     assert.match(page.content[0]?.text ?? '', /\[truncated; raise max_elements\]/);
+  });
+});
+
+test('find filters case insensitively and omits the truncation note for a complete page', { skip }, async () => {
+  const host = { ...fresh(work), truncated: false };
+  await withHosts([host], async () => {
+    const found = await call('find', { tab_id: 11, text: 'SUBMIT' });
+    const text = found.content[0]?.text ?? '';
+    assert.equal(found.isError, undefined);
+    assert.match(text, /1 element\(s\)/);
+    assert.match(text, /e2\tbutton\tSubmit\tdisabled/);
+    assert.doesNotMatch(text, /Search|Home|truncated/);
+  });
+});
+
+test('find reports an empty match and read_page reports an empty page', { skip }, async () => {
+  await withHosts([fresh(work)], async () => {
+    const missing = await call('find', { tab_id: 11, text: 'not found' });
+    assert.match(missing.content[0]?.text ?? '', /Nothing on this page matches "not found"/);
+  });
+
+  const empty = { ...fresh(work), elements: [] };
+  await withHosts([empty], async () => {
+    const page = await call('read_page', { tab_id: 11 });
+    assert.equal(page.content[0]?.text, 'No interactive elements found on this page.');
   });
 });
 
