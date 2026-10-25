@@ -209,6 +209,57 @@ test('it asks Chrome to wake it and records console values with their descriptio
   assert.deepEqual(networkFor(77, 1).map((entry) => [entry.method, entry.type, entry.status]), [['POST', 'XHR', 201]]);
 });
 
+test('evaluation preserves returned values and page exceptions', async () => {
+  await load();
+  const { attach, evaluate } = await import('../extension/browser/cdp.js');
+  await attach(78);
+
+  const chrome = (globalThis as unknown as {
+    chrome: {
+      debugger: {
+        sendCommand: (target: { tabId: number }, method: string, params?: object) => Promise<unknown>;
+      };
+    };
+  }).chrome;
+  const replies: unknown[] = [
+    { result: { type: 'undefined', description: 'Promise' } },
+    { result: { type: 'undefined' } },
+    { result: { type: 'string', value: 'plain text' } },
+    { result: { type: 'object', value: { status: 'ready' } } },
+    { exceptionDetails: { text: 'Uncaught', exception: { description: 'Error: page failed' } } },
+  ];
+  chrome.debugger.sendCommand = async (_target, method) => {
+    assert.equal(method, 'Runtime.evaluate');
+    return replies.shift() ?? {};
+  };
+
+  assert.deepEqual(await evaluate(78, 'Promise.resolve()'), { value: 'Promise', type: 'undefined', threw: false });
+  assert.deepEqual(await evaluate(78, 'undefined'), { value: 'undefined', type: 'undefined', threw: false });
+  assert.deepEqual(await evaluate(78, '"plain text"'), { value: 'plain text', type: 'string', threw: false });
+  assert.deepEqual(await evaluate(78, '({ status: "ready" })'), {
+    value: '{"status":"ready"}', type: 'object', threw: false,
+  });
+  assert.deepEqual(await evaluate(78, 'throw new Error()'), { value: 'Error: page failed', type: 'error', threw: true });
+});
+
+test('attach explains a debugger conflict and preserves other errors', async () => {
+  await load();
+  const { attach } = await import('../extension/browser/cdp.js');
+  const chrome = (globalThis as unknown as {
+    chrome: {
+      debugger: {
+        attach: (target: { tabId: number }, version: string) => Promise<void>;
+      };
+    };
+  }).chrome;
+
+  chrome.debugger.attach = async () => { throw new Error('Another debugger is already attached'); };
+  await assert.rejects(() => attach(79), /already has a debugger attached/);
+
+  chrome.debugger.attach = async () => { throw 'permission denied'; };
+  await assert.rejects(() => attach(80), (error: unknown) => error === 'permission denied');
+});
+
 test('a tab switch reaches the host when the opening attempt failed', async () => {
   const fake = await load(true);
   assert.equal(fake.ports.length, 0, 'the opening attempt was refused');
