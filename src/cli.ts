@@ -113,7 +113,9 @@ async function main(): Promise<number> {
     doctor: runDoctor,
     status: runStatus,
   };
-  const handler = action === undefined ? undefined : handlers[action];
+  const handler = action !== undefined && Object.hasOwn(handlers, action)
+    ? handlers[action]
+    : undefined;
   if (handler !== undefined) { return handler(); }
   process.stdout.write(USAGE);
   return action === undefined || action === '-h' || action === '--help' ? EXIT.OK : EXIT.USAGE;
