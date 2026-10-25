@@ -66,6 +66,20 @@ function answer(host: FakeHost, request: { op: string; args?: Record<string, unk
       const tabId = request.args?.['tabId'] as number;
       return ok({ tabId, url: 'https://x/', title: `page in ${host.id}`, text: 'hello', truncated: false });
     }
+    case 'readPage': {
+      const tabId = request.args?.['tabId'] as number;
+      return ok({
+        tabId,
+        url: 'https://x/',
+        title: `page in ${host.id}`,
+        elements: [
+          { ref: 'e1', role: 'textbox', name: 'Search', tag: 'input', value: 'hello' },
+          { ref: 'e2', role: 'button', name: 'Submit', tag: 'button', disabled: true },
+          { ref: 'e3', role: 'link', name: 'Home', tag: 'a' },
+        ],
+        truncated: true,
+      });
+    }
     case 'openTab': {
       const id = host.nextTabId ?? 900;
       const tab = { id, windowId: 1, url: String(request.args?.['url'] ?? ''), title: 'new' };
@@ -160,6 +174,17 @@ test('a tab tool reaches the browser that owns the tab, by id alone', { skip }, 
     assert.match(page.content[0]?.text ?? '', /page in e5f6a7b8/);
     assert.ok(b.received.includes('getPageText'), 'the owning browser answered');
     assert.ok(!a.received.includes('getPageText'), 'the other browser was not asked');
+  });
+});
+
+test('read_page formats element values, disabled state, and truncation', { skip }, async () => {
+  await withHosts([fresh(work)], async () => {
+    const page = await call('read_page', { tab_id: 11 });
+    assert.equal(page.isError, undefined);
+    assert.match(page.content[0]?.text ?? '', /page in a1b2c3d4/);
+    assert.match(page.content[0]?.text ?? '', /e1\ttextbox\tSearch\tvalue="hello"/);
+    assert.match(page.content[0]?.text ?? '', /e2\tbutton\tSubmit\tdisabled/);
+    assert.match(page.content[0]?.text ?? '', /\[truncated; raise max_elements\]/);
   });
 });
 

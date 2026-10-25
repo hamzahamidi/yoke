@@ -5,6 +5,7 @@
 *.zip
 node_modules/
 dist/
+coverage/
 
 # Built from src/browser by `npm run build`. Chrome loads extension/, so the
 # output lands there, but it is not source.
