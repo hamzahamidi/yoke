@@ -368,6 +368,10 @@ test('open_tab with two browsers connected needs one named, by id or by label', 
     const unknown = await call('open_tab', { url: 'https://example.com', browser: 'nope' });
     assert.equal(unknown.isError, true);
     assert.match(unknown.content[0]?.text ?? '', /nope/);
+
+    const invalid = await call('open_tab', { url: 'https://example.com', browser: 7 });
+    assert.equal(invalid.isError, true);
+    assert.match(invalid.content[0]?.text ?? '', /browser must be an id or label/);
   });
 });
 
