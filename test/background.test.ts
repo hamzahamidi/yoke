@@ -152,6 +152,25 @@ test('it asks Chrome to wake it when somebody uses the browser', async () => {
   assert.equal(consoleFor(77, 1)[0]?.text, '42');
 });
 
+test('console values use protocol values or their descriptions when absent', async () => {
+  const fake = await load();
+  const { attach, consoleFor } = await import('../extension/browser/cdp.js');
+  await attach(78);
+  fake.debuggerEvents.fire({ tabId: 78 }, 'Runtime.consoleAPICalled', {
+    type: 'log',
+    args: [
+      { description: 'missing value' },
+      { value: null },
+      { value: 'plain text' },
+      { value: false },
+      { value: 42 },
+      { value: { status: 'ready' } },
+      { value: () => {}, description: 'callable' },
+    ],
+  });
+  assert.equal(consoleFor(78, 1)[0]?.text, 'missing value null plain text false 42 {"status":"ready"} callable');
+});
+
 test('a tab switch reaches the host when the opening attempt failed', async () => {
   const fake = await load(true);
   assert.equal(fake.ports.length, 0, 'the opening attempt was refused');
