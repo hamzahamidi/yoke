@@ -11,7 +11,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from
 import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
-const powershell = join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const powershell = join(process.env['SystemRoot'] ?? String.raw`C:\Windows`, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const manifest = JSON.parse(readFileSync(join(root, 'extension', 'manifest.json'), 'utf8'));
 

@@ -24,6 +24,8 @@
     "build": "tsc && tsc -p tsconfig.extension.json",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.extension.json --noEmit",
     "test": "npm run build && node --test --experimental-strip-types test/*.test.ts",
+    "coverage:run": "npm run package && rm -rf extension/browser && tsc -p tsconfig.extension.json --sourceMap && node --test --experimental-strip-types test/*.test.ts",
+    "coverage": "c8 --reporter=lcov --reporter=text-summary --reports-dir=coverage --include='dist/**/*.js' --include='extension/**/*.js' --include='scripts/**/*.mjs' --all npm run coverage:run",
     "lint": "tsc --noEmit",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "check:versions": "node scripts/check-versions.mjs",
@@ -47,6 +49,7 @@
   "devDependencies": {
     "@types/chrome": "^0.0.270",
     "@types/node": "^22.0.0",
+    "c8": "^12.0.0",
     "typescript": "^5.6.0"
   },
   "type": "module",

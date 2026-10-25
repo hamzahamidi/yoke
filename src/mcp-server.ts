@@ -16,6 +16,7 @@ import {
   allTabs, askTab, chooseBrowser, displayName, endpointForTabs, unplace,
   NoSuchBrowser, NoSuchTab, type Browser,
 } from './browsers.js';
+import type { ResultOf } from './protocol.js';
 import { ask, ExtensionUnavailable, NOT_CONNECTED } from './socket-client.js';
 
 export const SERVER_NAME = 'yoke';
@@ -569,6 +570,13 @@ async function handleToolGetPageText(name: string, args: Record<string, unknown>
   return undefined;
 }
 
+function renderPageElement(element: ResultOf<'readPage'>['elements'][number]): string {
+  const extra = [element.value ? `value=${JSON.stringify(element.value)}` : '', element.disabled ? 'disabled' : '']
+    .filter(Boolean).join(' ');
+  const extraColumn = extra ? `\t${extra}` : '';
+  return `${element.ref}\t${element.role}\t${element.name.slice(0, 70)}${extraColumn}`;
+}
+
 async function handleToolReadPageOrFind(name: string, args: Record<string, unknown>): Promise<ToolResult | undefined> {
   if (name === 'read_page' || name === 'find') {
     const maxElements = typeof args['max_elements'] === 'number' ? args['max_elements'] : undefined;
@@ -586,12 +594,7 @@ async function handleToolReadPageOrFind(name: string, args: Record<string, unkno
         ? 'No interactive elements found on this page.'
         : `Nothing on this page matches ${JSON.stringify(args['text'])}.`);
     }
-    const rows = shown.map((e) => {
-      const extra = [e.value ? `value=${JSON.stringify(e.value)}` : '', e.disabled ? 'disabled' : '']
-        .filter(Boolean).join(' ');
-      const extraColumn = extra ? `\t${extra}` : '';
-      return `${e.ref}\t${e.role}\t${e.name.slice(0, 70)}${extraColumn}`;
-    });
+    const rows = shown.map(renderPageElement);
     const note = page.truncated ? '\n[truncated; raise max_elements]' : '';
     return text(`${page.title}\n${shownUrl(page.url)}\n${shown.length} element(s)\nref\trole\tname\n${rows.join('\n')}${note}`);
   }

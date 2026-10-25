@@ -36,6 +36,7 @@ interface Fake {
     onCreated: Listeners<[unknown]>;
     onUpdated: Listeners<[number, unknown, unknown]>;
   };
+  debuggerEvents: Listeners<[unknown, string, unknown]>;
 }
 
 /**
@@ -53,6 +54,8 @@ function install(refuseFirstConnect = false): Fake {
     onCreated: slot<[unknown]>(),
     onUpdated: slot<[number, unknown, unknown]>(),
   };
+  const debuggerEvents = slot<[unknown, string, unknown]>();
+  const debuggerDetaches = slot<[unknown]>();
   (globalThis as { chrome?: unknown }).chrome = {
     runtime: {
       lastError: undefined,
@@ -78,9 +81,20 @@ function install(refuseFirstConnect = false): Fake {
     },
     tabs: { ...tabs, onRemoved: slot<[number]>() },
     windows: { onCreated: slot<[unknown]>(), getAll: async () => [{ id: 1 }] },
-    debugger: { onEvent: slot<[unknown, string, unknown]>(), onDetach: slot<[unknown]>() },
+    debugger: {
+      onEvent: debuggerEvents,
+      onDetach: debuggerDetaches,
+      attach: async () => {},
+      detach: async () => {},
+      sendCommand: async () => ({}),
+    },
+    action: {
+      setBadgeText: async () => {},
+      setBadgeBackgroundColor: async () => {},
+      setTitle: async () => {},
+    },
   };
-  return { ports, tabs };
+  return { ports, tabs, debuggerEvents };
 }
 
 interface Scheduled {
@@ -128,6 +142,14 @@ test('it asks Chrome to wake it when somebody uses the browser', async () => {
 
   assert.ok(fake.tabs.onActivated.count() > 0, 'a tab switch should be able to start the worker');
   assert.ok(fake.tabs.onCreated.count() > 0, 'a new tab should be able to start the worker');
+
+  const { attach, consoleFor } = await import('../extension/browser/cdp.js');
+  await attach(77);
+  fake.debuggerEvents.fire({ tabId: 77 }, 'Runtime.consoleAPICalled', {
+    type: 'log',
+    args: [{ value: 42 }],
+  });
+  assert.equal(consoleFor(77, 1)[0]?.text, '42');
 });
 
 test('a tab switch reaches the host when the opening attempt failed', async () => {

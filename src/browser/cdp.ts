@@ -56,7 +56,7 @@ function remoteValue(value: unknown, description?: string): string {
   if (typeof value === 'object') {
     try { return JSON.stringify(value) ?? description ?? ''; } catch { return description ?? '[unavailable]'; }
   }
-  return value.toString();
+  return String(value);
 }
 
 function recordConsoleCall(tab: TabState, params: unknown): void {
