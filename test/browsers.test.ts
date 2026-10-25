@@ -24,6 +24,10 @@ interface FakeHost {
   tabs: Array<{ id: number; windowId: number; url: string; title: string }>;
   elements?: Array<{ ref: string; role: string; name: string; tag: string; value?: string; disabled?: boolean }>;
   truncated?: boolean;
+  groups?: Array<{ id: number; title: string; color: string; windowId: number; collapsed: boolean }>;
+  navigateStatus?: 'complete' | 'timeout';
+  openedGroupId?: number | null;
+  releaseResult?: boolean;
   /** Every op the host was asked, in order. */
   received: string[];
   /** Answer identify with an unknown-op error, as an extension from before it would. */
@@ -63,7 +67,7 @@ function answer(host: FakeHost, request: { op: string; args?: Record<string, unk
     case 'listTabs':
       return ok({ tabs: host.tabs.map((tab) => ({ ...tab, groupId: -1 })) });
     case 'listGroups':
-      return ok({ groups: [] });
+      return ok({ groups: host.groups ?? [] });
     case 'getPageText': {
       const tabId = request.args?.['tabId'] as number;
       return ok({ tabId, url: 'https://x/', title: `page in ${host.id}`, text: 'hello', truncated: false });
@@ -82,12 +86,60 @@ function answer(host: FakeHost, request: { op: string; args?: Record<string, unk
         truncated: host.truncated ?? true,
       });
     }
+    case 'navigate': {
+      const tabId = request.args?.['tabId'] as number;
+      const url = request.args?.['url'] as string;
+      return ok({ tabId, url, title: 'navigated', status: host.navigateStatus ?? 'complete' });
+    }
+    case 'closeTab':
+      return ok({ closed: request.args?.['tabId'] });
+    case 'click': {
+      const tabId = request.args?.['tabId'] as number;
+      const ref = request.args?.['ref'] as string;
+      return ok({ tabId, ref, dispatched: true, hit: 'covered', topmost: 'dialog' });
+    }
+    case 'typeText':
+      return ok({ tabId: request.args?.['tabId'], typed: String(request.args?.['text'] ?? '').length });
+    case 'pressKey':
+      return ok({ tabId: request.args?.['tabId'], key: request.args?.['key'] });
+    case 'scroll':
+      return ok({ tabId: request.args?.['tabId'], dx: request.args?.['dx'] ?? 0, dy: request.args?.['dy'] ?? 400 });
+    case 'screenshot': {
+      const format = request.args?.['format'] ?? 'png';
+      return ok({ tabId: request.args?.['tabId'], format, base64: 'aW1hZ2U=', bytes: 5 });
+    }
+    case 'evaluate':
+      return ok({
+        tabId: request.args?.['tabId'],
+        value: 'result',
+        type: 'string',
+        threw: request.args?.['expression'] === 'throw new Error()',
+      });
+    case 'consoleMessages':
+      return ok({
+        tabId: request.args?.['tabId'],
+        attachedNow: false,
+        messages: [{ level: 'warning', text: 'x'.repeat(205), at: 0 }],
+      });
+    case 'networkRequests':
+      return ok({
+        tabId: request.args?.['tabId'],
+        attachedNow: false,
+        requests: [{ method: 'GET', url: 'https://example.com/api?token=secret', status: 200, at: 0 }],
+      });
+    case 'groupTabs':
+      return ok({ groupId: 7, title: request.args?.['title'] ?? 'Yoke', tabIds: request.args?.['tabIds'] });
+    case 'ungroupTabs':
+      return ok({ tabIds: request.args?.['tabIds'] });
+    case 'release':
+      return ok({ tabId: request.args?.['tabId'], released: host.releaseResult ?? true });
     case 'openTab': {
       const id = host.nextTabId ?? 900;
       const tab = { id, windowId: 1, url: String(request.args?.['url'] ?? ''), title: 'new' };
       // The listing must show it afterwards, as a real browser's would.
       host.tabs.push(tab);
-      return ok({ tab: { ...tab, groupId: 1 }, groupId: 1, groupTitle: 'yoke' });
+      const groupId = host.openedGroupId === null ? undefined : host.openedGroupId ?? 1;
+      return ok({ tab: { ...tab, groupId: groupId ?? -1 }, groupId, groupTitle: 'yoke' });
     }
     default:
       return { ok: false, error: `fake host has no ${request.op}`, protocol: 1 };
@@ -181,12 +233,73 @@ test('a tab tool reaches the browser that owns the tab, by id alone', { skip }, 
 
 test('read_page formats element values, disabled state, and truncation', { skip }, async () => {
   await withHosts([fresh(work)], async () => {
-    const page = await call('read_page', { tab_id: 11 });
+    const page = await call('read_page', { tab_id: 11, max_elements: 2 });
     assert.equal(page.isError, undefined);
     assert.match(page.content[0]?.text ?? '', /page in a1b2c3d4/);
     assert.match(page.content[0]?.text ?? '', /e1\ttextbox\tSearch\tvalue="hello"/);
     assert.match(page.content[0]?.text ?? '', /e2\tbutton\tSubmit\tdisabled/);
     assert.match(page.content[0]?.text ?? '', /\[truncated; raise max_elements\]/);
+  });
+});
+
+test('tab tools format navigation, input, screenshots, console, network, groups, and release', { skip }, async () => {
+  const host = fresh(work);
+  host.groups = [{ id: 7, title: 'Yoke', color: 'cyan', windowId: 1, collapsed: false }];
+  await withHosts([host], async () => {
+    const groups = await call('list_tab_groups');
+    assert.match(groups.content[0]?.text ?? '', /7\t"Yoke"\tcyan\t0 tab\(s\)/);
+
+    const invalidNavigation = await call('navigate', { tab_id: 11, url: 'chrome://settings' });
+    assert.equal(invalidNavigation.isError, true);
+    assert.match(invalidNavigation.content[0]?.text ?? '', /http or https/);
+    const navigation = await call('navigate', { tab_id: 11, url: 'https://example.com/next?token=secret', timeout_ms: 50 });
+    assert.match(navigation.content[0]?.text ?? '', /Navigated tab 11 to https:\/\/example.com\/next/);
+
+    host.navigateStatus = 'timeout';
+    const timedOut = await call('navigate', { tab_id: 11, url: 'https://example.com/slow' });
+    assert.match(timedOut.content[0]?.text ?? '', /did not report finishing loading/);
+
+    const clicked = await call('click', { tab_id: 11, ref: 'e1', button: 'right', click_count: 2 });
+    assert.match(clicked.content[0]?.text ?? '', /dialog was on top/);
+    const typed = await call('type_text', { tab_id: 11, ref: 'e1', text: 'hello', press_enter: true });
+    assert.match(typed.content[0]?.text ?? '', /Typed 5 character\(s\) and pressed Enter/);
+    const key = await call('press_key', { tab_id: 11, ref: 'e1', key: 'Escape' });
+    assert.match(key.content[0]?.text ?? '', /Pressed Escape/);
+    const scrolled = await call('scroll', { tab_id: 11, dx: 0, dy: 250 });
+    assert.match(scrolled.content[0]?.text ?? '', /Scrolled/);
+
+    const screenshot = await call('screenshot', { tab_id: 11, format: 'jpeg', quality: 70 });
+    assert.equal(screenshot.images?.[0]?.format, 'jpeg');
+    const evaluated = await call('run_javascript', { tab_id: 11, expression: '1 + 1' });
+    assert.match(evaluated.content[0]?.text ?? '', /string: result/);
+    const threw = await call('run_javascript', { tab_id: 11, expression: 'throw new Error()' });
+    assert.match(threw.content[0]?.text ?? '', /threw: result/);
+
+    const console = await call('read_console', { tab_id: 11, limit: 3 });
+    assert.equal((console.content[0]?.text ?? '').length <= 260, true);
+    assert.match(console.content[0]?.text ?? '', /warning\t/);
+    const network = await call('read_network', { tab_id: 11, limit: 3 });
+    assert.match(network.content[0]?.text ?? '', /200\tGET\thttps:\/\/example.com\/api/);
+    assert.doesNotMatch(network.content[0]?.text ?? '', /secret/);
+
+    const grouped = await call('group_tabs', { tab_ids: [11], title: 'Review', color: 'blue' });
+    assert.match(grouped.content[0]?.text ?? '', /group 7 "Review"/);
+    const ungrouped = await call('ungroup_tabs', { tab_ids: [11] });
+    assert.match(ungrouped.content[0]?.text ?? '', /Ungrouped 1 tab/);
+    const closed = await call('close_tab', { tab_id: 11 });
+    assert.match(closed.content[0]?.text ?? '', /Closed tab 11/);
+    const released = await call('release_tab', { tab_id: 11 });
+    assert.match(released.content[0]?.text ?? '', /Released tab 11/);
+    host.releaseResult = false;
+    const alreadyReleased = await call('release_tab', { tab_id: 11 });
+    assert.match(alreadyReleased.content[0]?.text ?? '', /was not being driven/);
+
+    host.openedGroupId = null;
+    const unknownGroup = await call('open_tab', { url: 'https://example.com/unknown' });
+    assert.match(unknownGroup.content[0]?.text ?? '', /grouping unknown/);
+    host.openedGroupId = -1;
+    const refusedGroup = await call('open_tab', { url: 'https://example.com/refused' });
+    assert.match(refusedGroup.content[0]?.text ?? '', /Chrome refused/);
   });
 });
 

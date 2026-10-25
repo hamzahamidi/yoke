@@ -25,6 +25,7 @@ function slot<T extends unknown[]>(): Listeners<T> {
 interface FakePort {
   onMessage: Listeners<[unknown]>;
   onDisconnect: Listeners<[]>;
+  responses: unknown[];
   postMessage(message: unknown): void;
 }
 
@@ -67,10 +68,12 @@ function install(refuseFirstConnect = false): Fake {
           // throwing, but the state the worker is then in is this one.
           throw new Error('no port');
         }
+        const responses: unknown[] = [];
         const port: FakePort = {
           onMessage: slot<[unknown]>(),
           onDisconnect: slot<[]>(),
-          postMessage: () => {},
+          responses,
+          postMessage: (message) => { responses.push(message); },
         };
         ports.push(port);
         return port;
@@ -79,7 +82,20 @@ function install(refuseFirstConnect = false): Fake {
       onStartup: slot<[]>(),
       onInstalled: slot<[]>(),
     },
-    tabs: { ...tabs, onRemoved: slot<[number]>() },
+    tabs: {
+      ...tabs,
+      onRemoved: slot<[number]>(),
+      get: async (tabId: number) => ({ id: tabId, windowId: 1 }),
+      group: async () => 7,
+    },
+    tabGroups: {
+      query: async () => [],
+      update: async () => ({ id: 7, title: 'yoke' }),
+      get: async () => ({ id: 7, title: 'yoke' }),
+    },
+    scripting: {
+      executeScript: async () => [{ result: { found: true, x: 10, y: 20, hit: 'self' } }],
+    },
     windows: { onCreated: slot<[unknown]>(), getAll: async () => [{ id: 1 }] },
     debugger: {
       onEvent: debuggerEvents,
@@ -143,7 +159,7 @@ test('it asks Chrome to wake it and records console values with their descriptio
   assert.ok(fake.tabs.onActivated.count() > 0, 'a tab switch should be able to start the worker');
   assert.ok(fake.tabs.onCreated.count() > 0, 'a new tab should be able to start the worker');
 
-  const { attach, consoleFor } = await import('../extension/browser/cdp.js');
+  const { attach, consoleFor, networkFor } = await import('../extension/browser/cdp.js');
   await attach(77);
   fake.debuggerEvents.fire({ tabId: 77 }, 'Runtime.consoleAPICalled', {
     type: 'log',
@@ -164,6 +180,33 @@ test('it asks Chrome to wake it and records console values with their descriptio
     ],
   });
   assert.equal(consoleFor(77, 1)[0]?.text, 'missing value null plain text false 42 {"status":"ready"} callable');
+
+  const circular: Record<string, unknown> = {};
+  circular['self'] = circular;
+  fake.debuggerEvents.fire({ tabId: 77 }, 'Runtime.consoleAPICalled', {
+    type: 'log',
+    args: [
+      { value: undefined },
+      { value: circular, description: 'circular value' },
+      { value: true },
+    ],
+  });
+  assert.equal(consoleFor(77, 1)[0]?.text, ' circular value true');
+
+  fake.debuggerEvents.fire({ tabId: 77 }, 'Log.entryAdded', {
+    entry: { level: 'warning', text: 'from log', url: 'https://example.com', lineNumber: 8 },
+  });
+  fake.debuggerEvents.fire({ tabId: 77 }, 'Runtime.exceptionThrown', {
+    exceptionDetails: { exception: { description: 'page error' } },
+  });
+  fake.debuggerEvents.fire({ tabId: 77 }, 'Network.requestWillBeSent', {
+    request: { method: 'POST', url: 'https://example.com/api' }, type: 'XHR',
+  });
+  fake.debuggerEvents.fire({ tabId: 77 }, 'Network.responseReceived', {
+    response: { url: 'https://example.com/api', status: 201 },
+  });
+  assert.deepEqual(consoleFor(77, 2).map((entry) => entry.text), ['from log', 'page error']);
+  assert.deepEqual(networkFor(77, 1).map((entry) => [entry.method, entry.type, entry.status]), [['POST', 'XHR', 201]]);
 });
 
 test('a tab switch reaches the host when the opening attempt failed', async () => {
@@ -254,4 +297,18 @@ test('a host that speaks and then exits keeps backing off', async () => {
 
   assert.equal(first, 2_000);
   assert.equal(latest()?.delay, 4_000, 'a port that did not last must not clear the backoff');
+});
+
+test('typing and pressing a key can focus a fresh page reference first', async () => {
+  const fake = await load();
+  const port = fake.ports[0];
+  assert.ok(port);
+
+  port.onMessage.fire({ id: 1, op: 'typeText', args: { tabId: 88, ref: 'e1', text: 'hello', pressEnter: true } });
+  await settle();
+  assert.deepEqual(port.responses.at(-1), { id: 1, ok: true, data: { tabId: 88, typed: 5 } });
+
+  port.onMessage.fire({ id: 2, op: 'pressKey', args: { tabId: 88, ref: 'e1', key: 'Escape' } });
+  await settle();
+  assert.deepEqual(port.responses.at(-1), { id: 2, ok: true, data: { tabId: 88, key: 'Escape' } });
 });
