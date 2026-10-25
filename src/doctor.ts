@@ -40,6 +40,27 @@ function checkBuild(): Check {
     : { ok: false, label: 'build', detail: `${host} is missing`, fix: 'npm run build' };
 }
 
+function registrationProblem(browser: string, manifest: HostManifest): string | undefined {
+  if (!existsSync(manifest.path)) {
+    return `${browser}: points at ${manifest.path}, which does not exist`;
+  }
+  if ((statSync(manifest.path).mode & 0o111) === 0) {
+    return `${browser}: its launcher ${manifest.path} is not executable`;
+  }
+  const launcher = readFileSync(manifest.path, 'utf8');
+  const interpreter = /exec "([^"]+)"|"([^"]+)" "/.exec(launcher);
+  const node = interpreter?.[1] ?? interpreter?.[2];
+  if (node && !existsSync(node)) {
+    return `${browser}: its launcher runs ${node}, which no longer exists`;
+  }
+  const missing = EXTENSION_IDS.filter(
+    (id) => !manifest.allowed_origins.includes(`chrome-extension://${id}/`));
+  if (missing.length > 0) {
+    return `${browser}: allowlists ${manifest.allowed_origins.join(', ')}, which is missing ${missing.join(', ')}`;
+  }
+  return undefined;
+}
+
 /**
  * Is the host registered, and does the registration agree with this build?
  *
@@ -69,31 +90,9 @@ function checkRegistration(): Check {
       problems.push(`${browser}: the manifest is not valid JSON`);
       continue;
     }
-    if (!existsSync(manifest.path)) {
-      problems.push(`${browser}: points at ${manifest.path}, which does not exist`);
-      continue;
-    }
-    // This is the file Chrome executes, so a missing execute bit is fatal and
-    // silent: Chrome simply never starts the host.
-    if ((statSync(manifest.path).mode & 0o111) === 0) {
-      problems.push(`${browser}: its launcher ${manifest.path} is not executable`);
-      continue;
-    }
-    // The launcher names an absolute interpreter precisely so Chrome does not
-    // need a PATH. If that interpreter has since moved, Chrome fails with
-    // nothing but "Native host has exited", so it is checked here instead.
-    const launcher = readFileSync(manifest.path, 'utf8');
-    const interpreter = /exec "([^"]+)"|"([^"]+)" "/.exec(launcher);
-    const node = interpreter?.[1] ?? interpreter?.[2];
-    if (node && !existsSync(node)) {
-      problems.push(`${browser}: its launcher runs ${node}, which no longer exists`);
-      continue;
-    }
-    const missing = EXTENSION_IDS.filter(
-      (id) => !manifest.allowed_origins.includes(`chrome-extension://${id}/`));
-    if (missing.length > 0) {
-      problems.push(
-        `${browser}: allowlists ${manifest.allowed_origins.join(', ')}, which is missing ${missing.join(', ')}`);
+    const problem = registrationProblem(browser, manifest);
+    if (problem) {
+      problems.push(problem);
       continue;
     }
     found.push(browser);
@@ -187,11 +186,11 @@ async function checkPing(browser: Browser, several: boolean): Promise<Check> {
       ? ''
       : `, holding ${held} tab(s): ${attached.join(', ')}. Release them with release_tab.`;
     return { ok: true, label, detail: `answered, version ${extension}${holding}` };
-  } catch (failure) {
+  } catch (error_) {
     return {
       ok: false,
       label,
-      detail: failure instanceof Error ? failure.message : String(failure),
+      detail: error_ instanceof Error ? error_.message : String(error_),
       fix: 'open chrome://extensions and check the service worker is running',
     };
   }
@@ -213,11 +212,11 @@ async function checkTabs(browser: Browser, several: boolean): Promise<Check> {
       label,
       detail: `${tabs.length} tab(s), ${ungrouped} of them in no tab group`,
     };
-  } catch (failure) {
+  } catch (error_) {
     return {
       ok: false,
       label,
-      detail: failure instanceof Error ? failure.message : String(failure),
+      detail: error_ instanceof Error ? error_.message : String(error_),
     };
   }
 }
@@ -233,11 +232,11 @@ export async function doctor(): Promise<Check[]> {
   // Each connected profile is checked on its own, because "the extension
   // answered" from one says nothing about the other.
   const several = browsers.length > 1;
-  for (const browser of browsers) {
+  const remoteChecks = await Promise.all(browsers.map(async (browser) => {
     const ping = await checkPing(browser, several);
-    checks.push(ping);
-    if (ping.ok) { checks.push(await checkTabs(browser, several)); }
-  }
+    return ping.ok ? [ping, await checkTabs(browser, several)] : [ping];
+  }));
+  checks.push(...remoteChecks.flat());
   return checks;
 }
 
@@ -249,9 +248,10 @@ export function render(checks: Check[]): string {
     return `${mark}  ${check.label.padEnd(width)} ${check.detail}${fix}`;
   });
   const broken = checks.find((check) => !check.ok);
-  lines.push('');
-  lines.push(broken
-    ? `Not working yet. The first thing to fix is "${broken.label}".`
-    : 'Working. Every link in the chain answered.');
+  if (broken) {
+    lines.push('', `Not working yet. The first thing to fix is "${broken.label}".`);
+  } else {
+    lines.push('', 'Working. Every link in the chain answered.');
+  }
   return `${lines.join('\n')}\n`;
 }

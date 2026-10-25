@@ -352,15 +352,24 @@ async function claimEndpoint(socketPath: string): Promise<void> {
   // path from a server that is still up means losing it later, when that server
   // finally stops and takes the successor's socket with it.
   const deadline = Date.now() + RETIRE_WAIT_MS;
-  while (existsSync(socketPath)) {
-    if (Date.now() > deadline) {
-      process.stderr.write(
-        `the host on ${socketPath} is not answering and has not let go, so this one is exiting rather `
-        + 'than taking a name another process is still serving.\n');
-      process.exit(0);
-    }
-    await new Promise((resolve) => { setTimeout(resolve, 100); });
+  const released = await waitForSocketRelease(socketPath, deadline);
+  if (!released) {
+    process.stderr.write(
+      `the host on ${socketPath} is not answering and has not let go, so this one is exiting rather `
+      + 'than taking a name another process is still serving.\n');
+    process.exit(0);
   }
+}
+
+function waitForSocketRelease(socketPath: string, deadline: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const check = (): void => {
+      if (!existsSync(socketPath)) { resolve(true); return; }
+      if (Date.now() > deadline) { resolve(false); return; }
+      setTimeout(check, 100);
+    };
+    check();
+  });
 }
 
 /** What is behind an endpoint: an extension that answers, one that does not, or no process at all. */
@@ -404,7 +413,9 @@ function askOwner(socketPath: string): Promise<Owner> {
 // "Native host has exited" with nothing else to go on. An entry point that the
 // runner invokes with unpredictable arguments cannot detect itself from argv, so
 // it should not try.
-void main().catch((failure) => {
-  process.stderr.write(`yoke host failed to start: ${String(failure)}\n`);
+try {
+  await main();
+} catch (error_) {
+  process.stderr.write(`yoke host failed to start: ${String(error_)}\n`);
   process.exit(1);
-});
+}
