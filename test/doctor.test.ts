@@ -68,7 +68,7 @@ test('doctor explains invalid registration paths, permissions, interpreters, and
     writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${hostPath}"\n`);
     chmodSync(launcher, 0o755);
     writeManifest(registration, { path: launcher, allowed_origins: [] });
-    assert.match((await doctor())[1]?.detail ?? '', /missing .*extension/);
+    assert.match((await doctor())[1]?.detail ?? '', /which is missing/);
   });
 });
 
