@@ -52,7 +52,7 @@ function printWindowsRegistration(result: ReturnType<typeof install>): number {
   return EXIT.OK;
 }
 
-async function runInstall(): Promise<number> {
+function runInstall(): number {
   const here = dirname(fileURLToPath(import.meta.url));
   const result = install({ hostPath: join(here, 'native-host.js') });
   for (const [browser, file] of result.written) {
