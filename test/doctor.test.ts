@@ -30,7 +30,7 @@ async function inEnvironment<T>(body: (home: string, runtime: string, registrati
   try {
     const registration = browserDirs(process.platform, home)[0]?.[1];
     assert.ok(registration);
-    mkdirSync(dirname(registration), { recursive: true });
+    mkdirSync(registration, { recursive: true });
     forget();
     return await body(home, runtime, registration);
   } finally {
@@ -75,7 +75,7 @@ test('doctor explains invalid registration paths, permissions, interpreters, and
 test('doctor checks the host and extension, then names the failing link', { skip }, async () => {
   await inEnvironment(async (home, runtime) => {
     install({ hostPath, home });
-    let failure: 'none' | 'ping' | 'tabs' = 'none';
+    let failure: 'none' | 'ping' | 'listTabs' = 'none';
     let input = '';
     const server = createServer((connection) => {
       connection.on('data', (chunk) => {
@@ -115,7 +115,7 @@ test('doctor checks the host and extension, then names the failing link', { skip
       assert.equal(pingFailure[4]?.ok, false);
       assert.match(pingFailure[4]?.detail ?? '', /ping failed/);
 
-      failure = 'tabs';
+      failure = 'listTabs';
       const tabsFailure = await doctor();
       assert.equal(tabsFailure[5]?.ok, false);
       assert.match(tabsFailure[5]?.detail ?? '', /listTabs failed/);
