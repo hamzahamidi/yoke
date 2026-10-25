@@ -49,7 +49,7 @@ const bundle = new URL('../extension/browser/background.js', import.meta.url);
 if (!existsSync(bundle)) {
   throw new Error('extension/browser/background.js is missing. Run `npm run build` before packaging.');
 }
-const bundleVersion = readFileSync(bundle, 'utf8').match(/io\.github\.hamzahamidi\.yoke/);
+const bundleVersion = /io\.github\.hamzahamidi\.yoke/.exec(readFileSync(bundle, 'utf8'));
 if (!bundleVersion) {
   throw new Error('the built extension does not name the current native messaging host, so it is stale');
 }

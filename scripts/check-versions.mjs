@@ -14,7 +14,7 @@ const manifest = JSON.parse(read('../extension/manifest.json'));
 
 // Read from source rather than dist, so this works before a build.
 const serverSource = read('../src/mcp-server.ts');
-const found = serverSource.match(/SERVER_VERSION\s*=\s*'([^']+)'/);
+const found = /SERVER_VERSION\s*=\s*'([^']+)'/.exec(serverSource);
 if (!found) {
   throw new Error('could not find SERVER_VERSION in src/mcp-server.ts');
 }
