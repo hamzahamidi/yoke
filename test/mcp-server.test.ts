@@ -47,6 +47,16 @@ test('an unknown method throws and an unknown tool does not', async () => {
   assert.equal(result.isError, true);
 });
 
+test('tool calls reject tab ids that were not returned by list_tabs', async () => {
+  await assert.rejects(
+    () => handle({
+      method: 'tools/call',
+      params: { name: 'navigate', arguments: { tab_id: 'not a number', url: 'https://example.com' } },
+    }),
+    /tab_id must be an integer from list_tabs/,
+  );
+});
+
 test('a url is reduced to origin and path unless asked otherwise', () => {
   // A raw URL can carry a token, and a tab listing is exactly where one gets
   // copied into a log.
