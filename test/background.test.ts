@@ -137,7 +137,7 @@ async function load(refuseFirstConnect = false): Promise<Fake> {
 
 const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
 
-test('it asks Chrome to wake it when somebody uses the browser', async () => {
+test('it asks Chrome to wake it and records console values with their descriptions', async () => {
   const fake = await load();
 
   assert.ok(fake.tabs.onActivated.count() > 0, 'a tab switch should be able to start the worker');
@@ -150,13 +150,8 @@ test('it asks Chrome to wake it when somebody uses the browser', async () => {
     args: [{ value: 42 }],
   });
   assert.equal(consoleFor(77, 1)[0]?.text, '42');
-});
 
-test('console values use protocol values or their descriptions when absent', async () => {
-  const fake = await load();
-  const { attach, consoleFor } = await import('../extension/browser/cdp.js');
-  await attach(78);
-  fake.debuggerEvents.fire({ tabId: 78 }, 'Runtime.consoleAPICalled', {
+  fake.debuggerEvents.fire({ tabId: 77 }, 'Runtime.consoleAPICalled', {
     type: 'log',
     args: [
       { description: 'missing value' },
@@ -168,7 +163,7 @@ test('console values use protocol values or their descriptions when absent', asy
       { value: () => {}, description: 'callable' },
     ],
   });
-  assert.equal(consoleFor(78, 1)[0]?.text, 'missing value null plain text false 42 {"status":"ready"} callable');
+  assert.equal(consoleFor(77, 1)[0]?.text, 'missing value null plain text false 42 {"status":"ready"} callable');
 });
 
 test('a tab switch reaches the host when the opening attempt failed', async () => {
